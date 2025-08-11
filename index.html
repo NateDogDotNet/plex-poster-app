@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Plex Poster Display</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: black;
+      overflow: hidden;
+      height: 100%;
+      width: 100%;
+    }
+    .poster-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .poster, .frame {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      object-fit: contain;
+    }
+    .frame {
+      z-index: 2;
+      pointer-events: none;
+      max-width: 100vw;
+      max-height: 100vh;
+    }
+    .poster {
+      z-index: 1;
+      transition: transform 0.3s ease;
+    }
+    .controls {
+      position: fixed;
+      bottom: 10px;
+      right: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      opacity: 0;
+      transition: opacity 0.3s;
+      z-index: 3;
+    }
+    .controls.visible {
+      opacity: 1;
+    }
+    .controls button {
+      font-size: 20px;
+      padding: 8px;
+      cursor: pointer;
+    }
+    .config-form, .diagnostics {
+      position: fixed;
+      background: white;
+      color: black;
+      padding: 20px;
+      border-radius: 10px;
+      top: 10%;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 5;
+    }
+    .diagnostics pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+  </style>
+</head>
+<body>
+  <div class="poster-container">
+    <img id="poster" class="poster" alt="Movie Poster" />
+    <img id="frame" class="frame" alt="Frame Overlay" />
+  </div>
+
+  <div class="controls" id="controls">
+    <button onclick="showForm()">⚙️</button>
+    <button onclick="showDiagnostics()">📊</button>
+    <button onclick="fetchPoster(true)">🔄</button>
+  </div>
+
+  <div class="config-form" id="form" style="display:none">
+    <h3>Configuration</h3>
+    <label>Plex Token <input id="PLEX_TOKEN" /></label><br>
+    <label>Plex Server URL <input id="PLEX_SERVER_URL" /></label><br>
+    <label>Plex Username <input id="PLEX_USERNAME" /></label><br>
+    <label>Library Key <input id="LIBRARY_KEY" /></label><br>
+    <label>Refresh Interval (ms) <input id="REFRESH_INTERVAL_MS" /></label><br>
+    <label>Frame Path <input id="FRAME_PATH" /></label><br>
+    <label>Poster Scale (%) <input id="POSTER_SCALE" type="number" value="100" /></label><br>
+    <label>Poster Offset X (%) <input id="POSTER_OFFSET_X" type="number" value="0" /></label><br>
+    <label>Poster Offset Y (%) <input id="POSTER_OFFSET_Y" type="number" value="0" /></label><br>
+    <button onclick="saveConfig()">Save</button>
+  </div>
+
+  <div class="diagnostics" id="diagnostics" style="display:none">
+    <h3>Diagnostics</h3>
+    <pre id="diag-output"></pre>
+    <button onclick="document.getElementById('diagnostics').style.display='none'">Close</button>
+  </div>
+
+  <script>
+    let lastPosterUrl = '[none]';
+    let lastStatus = '[not fetched]';
+    let lastFetch = '[never]';
+    let lastSource = '[unknown]';
+
+    function getConfig() {
+      return {
+        PLEX_TOKEN: localStorage.getItem('PLEX_TOKEN') || '',
+        PLEX_SERVER_URL: localStorage.getItem('PLEX_SERVER_URL') || '',
+        PLEX_USERNAME: localStorage.getItem('PLEX_USERNAME') || '',
+        LIBRARY_KEY: localStorage.getItem('LIBRARY_KEY') || '',
+        REFRESH_INTERVAL_MS: +localStorage.getItem('REFRESH_INTERVAL_MS') || 300000,
+        FRAME_PATH: localStorage.getItem('FRAME_PATH') || 'frame.png',
+        POSTER_SCALE: +localStorage.getItem('POSTER_SCALE') || 100,
+        POSTER_OFFSET_X: +localStorage.getItem('POSTER_OFFSET_X') || 0,
+        POSTER_OFFSET_Y: +localStorage.getItem('POSTER_OFFSET_Y') || 0
+      };
+    }
+
+    function showForm() {
+      const cfg = getConfig();
+      for (const key in cfg) {
+        const el = document.getElementById(key);
+        if (el) el.value = cfg[key];
+      }
+      document.getElementById('form').style.display = 'block';
+    }
+
+    function saveConfig() {
+      ['PLEX_TOKEN','PLEX_SERVER_URL','PLEX_USERNAME','LIBRARY_KEY','REFRESH_INTERVAL_MS','FRAME_PATH','POSTER_SCALE','POSTER_OFFSET_X','POSTER_OFFSET_Y']
+        .forEach(k => localStorage.setItem(k, document.getElementById(k).value));
+      document.getElementById('form').style.display = 'none';
+      location.reload();
+    }
+
+    function showDiagnostics() {
+      const cfg = getConfig();
+      document.getElementById('diag-output').textContent = `
+PLEX_TOKEN: ${cfg.PLEX_TOKEN.slice(0,5)}…
+PLEX_SERVER_URL: ${cfg.PLEX_SERVER_URL}
+PLEX_USERNAME: ${cfg.PLEX_USERNAME}
+LIBRARY_KEY: ${cfg.LIBRARY_KEY}
+REFRESH_INTERVAL_MS: ${cfg.REFRESH_INTERVAL_MS}
+FRAME_PATH: ${cfg.FRAME_PATH}
+POSTER_SCALE: ${cfg.POSTER_SCALE}
+POSTER_OFFSET_X: ${cfg.POSTER_OFFSET_X}
+POSTER_OFFSET_Y: ${cfg.POSTER_OFFSET_Y}
+Last Poster URL: ${lastPosterUrl}
+Last Fetch: ${lastFetch}
+Last Status: ${lastStatus}
+Last Source: ${lastSource}`;
+      document.getElementById('diagnostics').style.display = 'block';
+    }
+
+    async function fetchPoster(force = false) {
+      const cfg = getConfig();
+      const base = cfg.PLEX_SERVER_URL;
+      const token = cfg.PLEX_TOKEN;
+      try {
+        const nowPlayingRes = await fetch(`${base}/status/sessions?X-Plex-Token=${token}`);
+        const xmlText = await nowPlayingRes.text();
+        const xml = new DOMParser().parseFromString(xmlText, 'application/xml');
+        const video = xml.querySelector('Video');
+
+        let posterUrl;
+
+        if (video && video.getAttribute('thumb')) {
+          posterUrl = `${base}${video.getAttribute('thumb')}?X-Plex-Token=${token}`;
+          lastSource = 'Now Playing';
+        } else {
+          const recRes = await fetch(`${base}/library/sections/${cfg.LIBRARY_KEY}/all?unwatched=1&sort=rating:desc&X-Plex-Token=${token}`);
+          const recText = await recRes.text();
+          const recXml = new DOMParser().parseFromString(recText, 'application/xml');
+          const items = Array.from(recXml.querySelectorAll('Video'));
+          if (items.length > 0) {
+            const randomItem = items[Math.floor(Math.random() * items.length)];
+            posterUrl = `${base}${randomItem.getAttribute('thumb')}?X-Plex-Token=${token}`;
+            lastSource = 'Fallback (Random)';
+          }
+        }
+
+        if (posterUrl) {
+          lastPosterUrl = posterUrl;
+          lastStatus = `HTTP ${nowPlayingRes.status}`;
+          lastFetch = new Date().toLocaleString();
+          const poster = document.getElementById('poster');
+          const frame = document.getElementById('frame');
+          poster.src = posterUrl + '&t=' + Date.now();
+
+          const rect = frame.getBoundingClientRect();
+          const scaleFactor = cfg.POSTER_SCALE / 100;
+          const offsetX = rect.width * (cfg.POSTER_OFFSET_X / 100);
+          const offsetY = rect.height * (cfg.POSTER_OFFSET_Y / 100);
+          poster.style.width = rect.width * scaleFactor + 'px';
+          poster.style.height = rect.height * scaleFactor + 'px';
+          poster.style.transform = `translate(-50%, -50%) translate(${offsetX}px, ${offsetY}px)`;
+
+          window.posterFrameRect = rect;
+          window.posterCfg = cfg;
+        }
+      } catch (err) {
+        lastStatus = 'Fetch failed: ' + err.message;
+        lastFetch = new Date().toLocaleString();
+        console.error('Error fetching poster:', err);
+      }
+    }
+
+    function applyPosterConstraints() {
+      const poster = document.getElementById('poster');
+      const frame = document.getElementById('frame');
+      if (!poster || !frame || !window.posterCfg) return;
+
+      const rect = frame.getBoundingClientRect();
+      const cfg = window.posterCfg;
+      const scaleFactor = cfg.POSTER_SCALE / 100;
+      const offsetX = rect.width * (cfg.POSTER_OFFSET_X / 100);
+      const offsetY = rect.height * (cfg.POSTER_OFFSET_Y / 100);
+
+      poster.style.width = rect.width * scaleFactor + 'px';
+      poster.style.height = rect.height * scaleFactor + 'px';
+      poster.style.transform = `translate(-50%, -50%) translate(${offsetX}px, ${offsetY}px)`;
+    }
+
+    let hideTimer;
+    function showControlsTemporarily() {
+      document.getElementById('controls').classList.add('visible');
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => {
+        document.getElementById('controls').classList.remove('visible');
+      }, 3000);
+    }
+    document.addEventListener('mousemove', showControlsTemporarily);
+    document.getElementById('controls').addEventListener('mouseenter', () => clearTimeout(hideTimer));
+
+    window.onload = () => {
+      const cfg = getConfig();
+      document.getElementById('frame').src = cfg.FRAME_PATH;
+      fetchPoster();
+      setInterval(fetchPoster, cfg.REFRESH_INTERVAL_MS);
+      window.addEventListener('resize', applyPosterConstraints);
+    };
+  </script>
+</body>
+</html>

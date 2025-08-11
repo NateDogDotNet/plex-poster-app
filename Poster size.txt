@@ -1,0 +1,14 @@
+For movie posters in Plex, the standard aspect ratio is 1:1.5, or 2:3, meaning the width should be approximately 2/3 the height. A common size you'll find online is 680x1000 pixels, though this is slightly wider than the ideal 1:1.5 ratio. Aim for a minimum resolution of 600 pixels wide, with higher resolutions being better. 
+Elaboration:
+Aspect Ratio:
+.
+Plex uses a 1:1.5 aspect ratio for movie posters, ensuring they are displayed correctly in different Plex clients and library views.
+Minimum Size:
+.
+A minimum resolution of 600 pixels wide is recommended for movie posters, but higher resolutions are always preferred for better image quality.
+Example Size:
+.
+Many online sources, like TheTVDB, use 680x1000 pixels for posters, which is close to the 1:1.5 ratio.
+Background Art:
+.
+For background art, also known as fan art, Plex uses a 16:9 aspect ratio, which is the standard for widescreen televisions. 
