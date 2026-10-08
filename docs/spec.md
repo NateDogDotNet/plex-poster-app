@@ -2,7 +2,7 @@
 
 Baseline: commit `3a7b688` (v2.0.0, PWA rewrite). Run start: `46257c3` (the commit that recorded the owner's rulings). Target: v2.1.0. Companion plan: `docs/integration-plan.md`. Binding rulings: `docs/decisions.md` (D1-D16); every behaviour below that a ruling set cites its D-entry.
 
-Revision r2 (planning re-dispatch): lean scope per D1, rulings D2-D16 applied, and the r1 review findings closed. Anything the owner has not ruled on is a proposed reading, listed under *Open questions* (Q19-Q23).
+Revision r3 (planning re-dispatch): lean scope per D1, rulings D2-D16 applied, the r1 review findings closed, and the r2 confirmation findings (N1-N10) closed. Q19-Q23 were settled by the conductor at the r2 confirmation (see *Open questions*).
 
 ## Goal
 
@@ -78,19 +78,19 @@ Priorities: **P0** fix-first, **P1** protection, **P2** polish, **P3** bigger fe
 - Started with `--host 0.0.0.0`: `GET /config.json` from loopback with `Host: localhost:<port>` returns 200; from the machine's LAN address returns 403; a request from the LAN address that sends `X-Forwarded-For: 127.0.0.1` still returns 403; `GET /index.html` from the LAN address returns 200.
 - From the LAN address, `/.orchestrator/x.md`, `/docs/spec.md`, `/package.json` and `/README.md` return 404, as do `//config.json`, `/./config.json`, `/%63onfig.json`, `/config.json/` and `/CONFIG.JSON` (none returns 200).
 - A loopback peer sending `Host: evil.example` or `Host: localhost.evil.com` is refused for `config.json`; `Host: localhost:8080` and `Host: [::1]:8080` are accepted.
-- Unit tests for `isLoopback` cover IPv4, IPv6, IPv4-mapped IPv6, empty and undefined; for `isLoopbackHost` cover with and without port.
+- Unit tests for `isLoopback` cover IPv4, IPv6, IPv4-mapped IPv6, empty and undefined; for `isLoopbackHost` cover with and without port. The integration test spawns the server on a free port, never a fixed one, so concurrent worktrees do not collide (D12).
 
 **R-SEC-2 (P0, S1; D14) Token rotation.** The first commit (`5c4a716`) contains `config.js` with a real Plex token; it remains in git history. The owner must rotate the token (a human act, `mode: hitl`) and record a receipt. The hand-off lists both rotation routes **(verify which one revokes the leaked token)**: (a) plex.tv > Account > Authorized Devices, remove the device or sign out everywhere; (b) change the account password and tick "Sign out of connected devices". The owner's rejection check sends the token as an `X-Plex-Token` request header read from a file descriptor, never in a URL or on the command line. Purging history (`git filter-repo` plus force-push) is optional, irreversible, **skipped unless the owner says the repository is public or shared**, and outside the release path.
 - `docs/security/token-rotation.md` records `Rotated: yes`, the date, the method and "old token rejected (HTTP 401)".
-- The receipt contains no token-like string (no `X-Plex-Token` text and no 20-character alphanumeric run).
+- The receipt contains no token-like string (no `X-Plex-Token` text and no alphanumeric run of 20 or more characters).
 - If the owner opts in to a purge, a fresh clone of `origin` has no commit that touches `config.js`.
 
 ### Real-server validation
 
-**R-VAL-1 (P0, V1; D11) Core validation against a real Plex server.** Only the mock has been exercised. A human runs the checklist (`docs/validation/real-server-core.md`) against a real server and the real plex.tv: sign-in PIN flow including the automatic first-run flow (R-FIRST-1), server discovery and `firstReachable` connection choice, CORS on the `/photo/:/transcode` blob download (so cache-first works instead of the `directImages` fallback), `/status/sessions` shape, behaviour over http LAN vs https `plex.direct`. Failures reopen the phase the failing row names.
+**R-VAL-1 (P0, V1; D11) Core validation against a real Plex server.** Only the mock has been exercised. A human runs the checklist (`docs/validation/real-server-core.md`) against a real server and the real plex.tv: sign-in PIN flow through the **Sign in with Plex** button, server discovery and `firstReachable` connection choice, CORS on the `/photo/:/transcode` blob download (so cache-first works instead of the `directImages` fallback), `/status/sessions` shape, behaviour over http LAN vs https `plex.direct`. The automatic first-run code (R-FIRST-1) is built by `settings-sheet`, which the core validation does not wait for, so it is checked in the extended file (R-VAL-2). Failures reopen the phase the failing row names.
 - The file contains no `PENDING` and ends with exactly `Overall: PASS`. A FAIL keeps the phase open; it is never accepted.
 
-**R-VAL-2 (P3, V1; D11) Extended validation.** `docs/validation/real-server-extended.md` covers everything marked (verify) below: `contentRating` filter parameter and values (including country-prefixed values), `totalSize` for library counts, `viewOffset`/`duration`/`Player.title`, Chromium flag and policy names, package names on both Pi OS releases, and (rows marked `skip if no Pi`) `cec-ctl`/`cec-client`/`wlr-randr` power control with the compositor environment, `thermal_zone0`, and "window still full-screen after power off/on".
+**R-VAL-2 (P3, V1; D11) Extended validation.** `docs/validation/real-server-extended.md` covers the automatic first-run code (R-FIRST-1: unconfigured display shows the code, approving it at plex.tv/link signs in) and everything marked (verify) below: `contentRating` filter parameter and values (including country-prefixed values), `totalSize` for library counts, `viewOffset`/`duration`/`Player.title`, Chromium flag and policy names, package names on both Pi OS releases, and (rows marked `skip if no Pi`) `cec-ctl`/`cec-client`/`wlr-randr` power control with the compositor environment, `thermal_zone0`, and "window still full-screen after power off/on".
 - The file contains no `PENDING`, may mark Pi-only rows `SKIPPED` with a reason, and ends with exactly `Overall: PASS`. A FAIL keeps the phase open.
 
 ### First run
@@ -99,7 +99,7 @@ Priorities: **P0** fix-first, **P1** protection, **P2** polish, **P3** bigger fe
 - Unconfigured, with plex.tv intercepted by the test: the empty-state card shows the code (`#signin-code-large`) in a font at least 64 px tall without any click, a `POST /api/v2/pins` was made once, and Settings is not open.
 - When the intercepted pin expires, a new code replaces it and exactly one new pin is created.
 - At rotation 90 the code block is upright (transform angle equals the rotation, R-ROT-2).
-- A configured app (or one provisioned by `config.json`) makes no `/api/v2/pins` request.
+- A configured app (or one provisioned by `config.json`, intercepted by `context.route`) makes no `/api/v2/pins` request.
 - A plex.tv network failure does not loop: at most one retry every 30 s and no console error spam.
 
 ### Settings UI
@@ -141,7 +141,7 @@ Priorities: **P0** fix-first, **P1** protection, **P2** polish, **P3** bigger fe
 
 **R-CTRL-3 (P2, U13) Shortcut overlay.** Pressing `?` (or a "Keyboard shortcuts" button in Diagnostics) opens a dialog listing every shortcut, generated from the same table that drives `KEYS` in `js/main.js` so the two cannot drift. Esc closes. With `disableShortcuts` the overlay is not listed or opened.
 - The table has `r p space o f s d ?` with a label each and no duplicate keys; `listShortcuts({disableShortcuts:true})` is empty.
-- `?` opens the dialog with at least 8 entries generated from the table; Esc closes it; with `disableShortcuts:true`, `?` does nothing.
+- `?` opens the dialog with at least 8 entries generated from the table (at rotation 90 `#shortcuts`' computed angle is 90 and its box lies inside the viewport); Esc closes it; with `disableShortcuts:true`, `?` does nothing.
 
 ### Frame brightness
 
@@ -182,9 +182,10 @@ Priorities: **P0** fix-first, **P1** protection, **P2** polish, **P3** bigger fe
 - `.stage` computes a `transition` that includes `translate` with a duration between 1 s and 2 s; with emulated reduced motion it does not.
 - `pixelShift:false` leaves no `translate` and a stage equal to the margin-less size.
 
-**R-PROT-3 (P1, E10; D6) Guarded daily self-reload.** `dailyReload` (default **true**) reloads the page at `dailyReloadTime` (04:00 local) and on the first wake from sleep if the last reload was more than 12 h ago, but never while settings or diagnostics are open and never during a fade. **Guard (D6):** the reload happens only when `navigator.serviceWorker.controller` is set **and** a `fetch('index.html', {cache: 'no-store'})` probe succeeds just before reloading; otherwise it is skipped and the reason logged (an http LAN origin has no service worker, and a reload while the host is down would leave a dead browser error page). A guard against loops: `plexPoster.lastReload` is written before reloading and a second reload within 10 minutes is refused. Tablet note: in a browser tab (not an installed PWA) a reload drops Fullscreen API state, which needs a user gesture to re-enter; installed PWAs and `--kiosk` Chromium are unaffected, and the README says so. Schedules wait for a plausible clock (R-PROT-6).
-- Fake clock 03:59:30, service worker allowed: a reload happens at 04:00; none while Settings or Diagnostics is open (retried after close); `dailyReload:false` none; with the mock server down (probe fails) none and a logged skip; with service workers blocked (no controller) none and a logged skip.
+**R-PROT-3 (P1, E10; D6) Guarded daily self-reload.** `dailyReload` (default **true**) reloads the page at `dailyReloadTime` (04:00 local) and on the first wake from sleep if the last reload was more than 12 h ago, but never while settings or diagnostics are open and never during a fade. **Guard (D6):** the reload happens only when `navigator.serviceWorker.controller` is set **and** a `fetch('index.html', {cache: 'no-store'})` probe succeeds just before reloading (`sw.js` sends requests whose `cache` mode is `no-store` straight to the network instead of answering from the shell cache, so the probe really reaches the app server); otherwise it is skipped and the reason logged (an http LAN origin has no service worker, and a reload while the host is down would leave a dead browser error page). A guard against loops: `plexPoster.lastReload` is written before reloading and a second reload within 10 minutes is refused. Tablet note: in a browser tab (not an installed PWA) a reload drops Fullscreen API state, which needs a user gesture to re-enter; installed PWAs and `--kiosk` Chromium are unaffected, and the README says so. Schedules wait for a plausible clock (R-PROT-6).
+- Fake clock 03:59:30, service worker allowed: a reload happens at 04:00; none while Settings or Diagnostics is open (retried after close); `dailyReload:false` none; with the **app server** unreachable at 04:00 (probe fails; the spec stops its own `serve.mjs` child, or aborts the probe with an offline emulation that also covers service-worker fetches; never `mock.down()`, which only stops the Plex mock) none and a logged skip; with service workers blocked (no controller) none and a logged skip.
 - On wake from sleep with `plexPoster.lastReload` older than 12 h exactly one reload, newer none; after a reload settings persist and `paused` is cleared.
+- A `fetch('index.html', {cache: 'no-store'})` from a page controlled by the service worker is served by the network: it fails when the app server is stopped, and `sw.js` still serves the cached shell to ordinary requests and navigations when it is.
 - Diagnostics shows `Daily reload: active|skipped (reason)`.
 
 **R-PROT-4 (P1, E9) No expensive compositing.** Remove `backdrop-filter: blur(8px)` from `.sheet` (replaced by a slightly more opaque panel). No rule may use `backdrop-filter`; no `filter` is animated or transitioned (brightness changes are stepped, R-FRM-4). Also `overscroll-behavior: none` on `html, body` (sceptic M9) as the in-page backstop for swipe-back (R-DOC-4).
@@ -206,21 +207,21 @@ Priorities: **P0** fix-first, **P1** protection, **P2** polish, **P3** bigger fe
 - `cec-client` (libcec): `standby 0` / `on 0` through stdin.
 - `wlr-randr --output <name> --off|--on`, run with the compositor environment passed through: `WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR` taken from the helper's own environment or from `--helper-wayland-display` / `--helper-xdg-runtime-dir` (a `systemctl --user` service starts outside the compositor session and has neither).
 - Temperature: `/sys/class/thermal/thermal_zone0/temp` divided by 1000 (`vcgencmd measure_temp` as fallback).
-- `GET /__helper/status` returns `{power, temperature, tempC}` where `power` is the chosen strategy or `null`. A fake mode (`--helper-fake`) returns canned values and records calls for tests. Documented in the README.
+- `GET /__helper/status` returns `{power, temperature, tempC}` where `power` is the chosen strategy or `null`. A fake mode (`--helper-fake`) returns canned values, records calls for tests and lists them at `GET /__helper/calls` (fake mode only; 404 otherwise, same guards). Documented in the README.
 - A non-loopback peer, a missing header, a hostile Host or a non-boolean `on` gets 403/400 and runs no command (asserted with an injected fake `execFile`); a bad `X-Forwarded-For` has no effect.
 - `POST /__helper/brightness` does not exist (404).
 
 **R-HELP-2 (P1, E6, E9) Integration and temperature.** `js/helper.js` probes `/__helper/status` at boot (404 or network error means "no helper", silent); when `deviceHelper` (default false) is on and the helper exists: sleep calls power off after the veil is up and power on before the poster fetch on wake (R-PROT-1), and Diagnostics shows "CPU temperature". All of it no-ops on static hosting. A V1-extended row checks that after power off then on the window is still full-screen and playback wakes within a bounded time (a power cycle can renegotiate the display and hide the page).
 - A 404 or network error gives `available:false` without throwing; every request carries `X-Poster-Helper: 1`; failures are logged once, not every tick.
-- With `--helper --helper-fake`, entering sleep makes the call log show power off and waking shows power on; with `deviceHelper:false` or no `--helper` the page makes no `/__helper/` request after the initial probe and logs no console error.
+- With `--helper --helper-fake`, entering sleep makes `GET /__helper/calls` show power off and waking shows power on; with `deviceHelper:false` or no `--helper` the page makes no `/__helper/` request after the initial probe and logs no console error.
 
 ### Kiosk
 
 **R-KIOSK-1 (P1, E12; D10) Kiosk mode, PIN and recovery.** `kioskMode` hides the controls entirely (they are `inert`, so Tab cannot reach them): pointer movement and taps never reveal them. Two reveals work: a 3-second press-and-hold in the **bottom-right corner as the viewer sees it** (a 96x96 px zone mapped through `rotation` when `rotateUi` is on), and **holding OK/Enter for 3 s** (for D-pad remotes); either reveals the controls for 15 s, and both still work when `disableShortcuts` is on. `settingsPinHash`/`settingsPinSalt` hold a salted SHA-256 (Web Crypto; fallback to a plain pure-JS hash when `crypto.subtle` is unavailable on an insecure origin). When a PIN is set it is required to open Settings, Diagnostics, reset, import, and Show token. Five wrong tries lock for 60 s (doubling to 15 min). `disableShortcuts` ignores all keyboard shortcuts including `?`. **A PIN is a deterrent against children and visitors, not authentication; anyone with browser devtools or filesystem access can bypass it, and the UI and README say so (D16).**
 **PIN recovery (D10):** on every load the app fetches `config.json` (served to loopback clients only, R-SEC-1); if it contains `"resetPin": true` the stored `settingsPinHash`, `settingsPinSalt` and the lockout are cleared. A non-loopback client never receives `config.json`, so a PIN cannot be reset over the network. Diagnostics shows `PIN reset flag present` while the flag is in the file, and the README says to remove it afterwards (Q21).
 - Unit tests: hash/verify with salt, lockout schedule, corner-zone mapping at all four rotations, hold timer cancelling on movement over 12 px or early release.
-- E2E: in kiosk mode `pointermove`/tap/key never adds `.visible`; a 3 s hold in the corner does, for 15 s, at rotation 0 and 90; a 3 s Enter hold does, also with `disableShortcuts:true`; with a PIN set, `s` and the Settings button show the PIN dialog (on-screen keypad usable by touch); a wrong PIN keeps Settings closed; the correct PIN opens it.
-- With a PIN set and a `config.json` served by the test root containing `{"resetPin": true}`, after load Settings opens without a PIN and the PIN material is gone from `localStorage`; without the flag the PIN stays.
+- E2E: in kiosk mode `pointermove`/tap/key never adds `.visible`; a 3 s hold in the corner does, for 15 s, at rotation 0 and 90; a 3 s Enter hold does, also with `disableShortcuts:true`; with a PIN set, `s` and the Settings button show the PIN dialog (on-screen keypad usable by touch; at rotation 90 `#pin-dialog`'s computed angle is 90 and its box lies inside the viewport); a wrong PIN keeps Settings closed; the correct PIN opens it.
+- With a PIN set and `config.json` intercepted by `context.route` to return `{"resetPin": true}`, after load Settings opens without a PIN and the PIN material is gone from `localStorage`; without the flag the PIN stays.
 - Export never includes `settingsPinHash`/`settingsPinSalt` even with "include token" ticked, and an import file containing them is ignored.
 
 **R-KIOSK-2 (P1, E16) Show token behind the PIN.** `#token-toggle` ("Show") requires the PIN when one is set; it re-hides the field when the sheet closes.
@@ -229,12 +230,12 @@ Priorities: **P0** fix-first, **P1** protection, **P2** polish, **P3** bigger fe
 ### Content filter
 
 **R-FILT-1 (P1, E14; D5) Maximum content rating.** The limit is a "Household with children" toggle in Settings (UI-only: on reveals the rating select defaulting to `PG-13`, off stores `maxContentRating: ''`); it is **not** part of the protection preset. `maxContentRating` (`''` = no limit; `G`, `PG`, `PG-13`, `R`, `NC-17`) applies to:
-- **random posters** (pool loading) — request-side Plex `contentRating` filter **(verify parameter name, multi-value syntax and normalisation)** plus a client-side filter that is the guarantee;
+- **random posters** (pool loading) — request-side Plex `contentRating` filter **(verify parameter name, multi-value syntax and normalisation)** whose value list contains every ladder value at or below the limit **and** every mapped country-prefixed value at or below it (so `PG-13` sends `G`, `PG`, `PG-13`, the `TV-` equivalents and `gb/U`, `gb/PG`, `gb/12`, `gb/12A`, `de/0` and the rest of the table), plus a client-side filter that is the guarantee;
 - **cached (offline) posters** — `js/poster-cache.js` index entries gain `contentRating`, and `cache.random()` skips entries above the limit; entries without a stored rating (cached before 2.1) are skipped while a limit is set;
 - **now-playing** — when a limit is set and `limitNowPlaying` (default **true**, switchable) is on, a playing item above the limit (or unrated) is treated as nothing playing and the display shows a random allowed poster.
 An **owner-pinned** poster is exempt. Client-side ladder: `G=TV-Y=TV-G < PG=TV-Y7=TV-PG < PG-13=TV-14 < R=TV-MA < NC-17`. Country-prefixed values map onto that ladder (table below, Q19); **unrated, missing and unmapped values are excluded while a limit is set**. Because filtering shrinks the pool, the request oversamples (size x3, cap 500). The pool cache key includes the limit; an empty result produces the existing "No posters found" error with a hint to raise the limit.
 
-| Prefix | Mapping to the US ladder (proposed, Q19) |
+| Prefix | Mapping to the US ladder (ruled, Q19) |
 |---|---|
 | `gb/` | `U`=G, `PG`=PG, `12`/`12A`=PG-13, `15`=R, `18`=NC-17 |
 | `de/` | `0`=G, `6`=PG, `12`=PG-13, `16`=R, `18`=NC-17 |
@@ -243,8 +244,8 @@ An **owner-pinned** poster is exempt. Client-side ladder: `G=TV-Y=TV-G < PG=TV-Y
 | `fr/` | `U`=G, `10`=PG, `12`=PG-13, `16`=R, `18`=NC-17 |
 | `nl/` | `AL`=G, `6`/`9`=PG, `12`/`14`=PG-13, `16`=R, `18`=NC-17 |
 
-- Unit tests over every ladder rung, every table row, an unmapped prefixed value (`gb/XX`), unrated, missing, the oversample size, the pool cache key, the cache-index skip, and the now-playing rule (above limit, unrated, `limitNowPlaying:false`, pinned exempt).
-- Against the mock (its 8 titles carry G, PG, PG-13, R, TV-MA, `gb/12`, `gb/15` and no rating, and it honours the filter parameter), a PG-13 limit shows only the G, PG, PG-13 and `gb/12` titles across 50 picks (never R, TV-MA, `gb/15` or the unrated one); under `R` the R and TV-MA titles also appear (same rung); with no limit all 8 appear. NC-17 is covered by the unit tests.
+- Unit tests over every ladder rung, every table row, the request value list (every allowed ladder value and every mapped prefixed value at or below the limit, nothing above), an unmapped prefixed value (`gb/XX`), unrated, missing, the oversample size, the pool cache key, the cache-index skip, and the now-playing rule (above limit, unrated, `limitNowPlaying:false`, pinned exempt).
+- Against the mock (its 8 titles carry G, PG, PG-13, R, TV-MA, `gb/12`, `gb/15` and no rating, and it honours the filter parameter as a list), a PG-13 limit shows only the G, PG, PG-13 and `gb/12` titles across 50 picks (never R, TV-MA, `gb/15` or the unrated one); under `R` the R and TV-MA titles also appear (same rung); with no limit all 8 appear. NC-17 is covered by the unit tests.
 - A cached R poster is never shown by the offline fallback under PG-13, and a playing R title under PG-13 is not displayed (the next random allowed poster is).
 - The preset (R-PROT-5) leaves `maxContentRating` and `limitNowPlaying` unchanged.
 
@@ -271,8 +272,8 @@ An **owner-pinned** poster is exempt. Client-side ladder: `G=TV-Y=TV-G < PG=TV-Y
 **R-DOC-7 (P2) Feature docs and Roadmap.** README feature table, shortcut table (including the `?` overlay), project layout (every `js/*.js` and `scripts/*.mjs`), `npm run test:e2e` and the topologies of R-TOPO-1 match what shipped. `Roadmap.md` drops shipped ideas (scheduled dimming/sleep, playback progress) and gains an entry for each item deferred by D1: phone remote configuration (extends the existing "Remote control" idea; if revisited, the QR code appears only inside PIN-locked settings and no protective setting can be changed from the phone, D7), multi-poster landscape layout, frame per poster source with "Coming Attractions" artwork, animated frame bulbs, frame rotation.
 - Every module and script file name appears in the README; the Roadmap contains one heading per deferred item and no longer lists the shipped ideas.
 
-**R-DOC-8 (P1, sceptic M6/M7) Pi OS recipe.** README: turn off Pi OS screen blanking; set the Chromium policy `DeveloperToolsAvailability` to `2` (otherwise a USB keyboard shows the token in two keystrokes); the Chromium package is `chromium-browser` on Bookworm and `chromium` on Trixie **(verify)**; autostart via labwc `autostart` (Wayland) or XDG autostart (X11) **(verify)**; remove `config.json` after first run and delete a `resetPin` flag after using it.
-- README contains `DeveloperToolsAvailability`, `chromium-browser`, `chromium`, `labwc` and `screen blanking`.
+**R-DOC-8 (P1, sceptic M6/M7) Pi OS recipe.** README: turn off Pi OS screen blanking; set the Chromium policy `DeveloperToolsAvailability` to `2` (otherwise a USB keyboard shows the token in two keystrokes); the Chromium package is `chromium-browser` on Bookworm and `chromium` on Trixie **(verify)**; autostart via labwc `autostart` (Wayland) or XDG autostart (X11) **(verify)**; remove `config.json` after first run and delete a `resetPin` flag after using it. It also covers: (D2) rotating the OS or compositor instead of the app, with `rotateUi` turned off and the app rotation left at 0, as a supported option; (D8) the CEC helper needs `hdmi_force_hotplug=1` in the Pi boot config so the HDMI output stays enumerated while the TV is off, and the user must be in the `video` group for `/dev/cec0` **(verify both)**; (Q23) Pi OS `fake-hwclock` restores the last shutdown time, so after a long power-off the clock looks plausible but is stale until NTP syncs, and schedules can be briefly wrong until then.
+- README contains `DeveloperToolsAvailability`, `chromium-browser`, `chromium`, `labwc`, `screen blanking`, `rotateUi`, `hdmi_force_hotplug`, `video group` and `fake-hwclock`.
 
 **R-DOC-9 (P1, sceptic M2) Supported setups.** README has the "Supported setups" section of R-TOPO-1, the `config.json` loopback and reverse-proxy warning (a proxy on the same machine makes every client look like loopback), the helper section and the PIN-is-deterrence statement.
 - README contains `Supported setups`, `reverse proxy`, `--helper` and `deterrent`.
@@ -373,15 +374,15 @@ The owner ruled on Q1-Q18 at stop 1 (`docs/decisions.md`, `.orchestrator/questio
 | Q13 | Core and extended validation | Separate, both PASS (D11) | R-VAL-1/2 |
 | Q14-Q18 | Release path, worktrees, publish, daily reload, serve allowlist | D11, D12, D13, D6, D9 | R-REL-1, plan conventions, R-PROT-3, R-SEC-1 |
 
-New in r2, each with a proposed reading the plan uses until the owner rules (also appended to `.orchestrator/questions.md`):
+Settled by the conductor at the r2 confirmation (`.orchestrator/questions.md`, "Conductor-alone rulings"; listed to the owner at the next stop):
 
-| # | Question | Options | Proposed reading and cost | Blocks |
-|---|---|---|---|---|
-| Q19 | R-FILT-1: exact values of the country-prefix mapping table | A the table above; B owner supplies another | **A**. Cost: a wrong row shows a title one rung too strict or lax; the table is data in `js/ratings.js` and `real-server-validation-extended` checks real values | `content-rating-filter` |
-| Q20 | R-PROT-5: should the preset's night dim target the whole stage (`stage`) or only the frame? | A `stage`; B `frame` | **A**: dimming only the border does little in a dark hallway. Cost: the poster is dimmed too | `recommended-protection-preset` |
-| Q21 | R-KIOSK-1: `resetPin` stays in effect while the flag is in `config.json` (the README says to remove it) | A that; B one-shot (needs the app to write a "seen" marker keyed by file content) | **A**: simplest, no extra state. Cost: if forgotten, the PIN is cleared on every load; Diagnostics warns | `kiosk-and-pin` |
-| Q22 | R-NP-1: keep the "Playing in {Player.title}" label (D1 does not defer it) | A keep (default off); B drop | **A**. Cost: one setting and one line of text; B is leaner | `metadata-and-now-playing` |
-| Q23 | R-PROT-6: define a plausible clock as year >= 2026 | A hard-coded year constant; B first `Date` header from Plex | **A**: no network dependency. Cost: the constant must be bumped when it ages; B needs a request before the first schedule | `settings-and-schedule-core` |
+| # | Question | Ruling | Applied in |
+|---|---|---|---|
+| Q19 | R-FILT-1: exact values of the country-prefix mapping table | The table above is accepted; real stored strings are verified in extended validation | `content-rating-filter`, `real-server-validation-extended` |
+| Q20 | R-PROT-5: which target does the preset's night dim use? | The whole stage (`nightDimTarget:'stage'`), shown as an untickable row; `frame` stays the schema default | `recommended-protection-preset` |
+| Q21 | R-KIOSK-1: is `resetPin` one-shot? | No: honoured on every load while present; Diagnostics warns; the README says to remove it | `kiosk-and-pin`, `docs` |
+| Q22 | R-NP-1: keep the "Playing in {Player.title}" label? | Keep it, default off (D1 does not defer U9) | `metadata-and-now-playing` |
+| Q23 | R-PROT-6: how is a plausible clock defined? | Year >= 2026 as a constant in `js/schedule.js` plus re-evaluation on a clock jump; the README notes that `fake-hwclock` restores a stale time after a long power-off | `settings-and-schedule-core`, `docs` |
 
 ### (verify) list carried into V1
 
