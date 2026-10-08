@@ -26,3 +26,15 @@ Decisions that bind the integration plan (`docs/integration-plan.md`) and spec (
   - The client-side PIN is deterrence, and the UI says so.
   - `VERSION` is bumped once, at release. The rationale is clean releases, not that per-phase bumps reload clients: any `sw.js` edit already triggers an update.
   - Core and extended real-server validation stay as separate phases.
+
+## Stop 3 — 2026-10-08, owner answer "Approve" (items 1–3; item 4, token rotation, still open)
+
+- **D17 Resolved review finding.** The first `validation-checklists` doc review's Criticals (row C07 token display, row C03 cancel/expiry, citing D11) are resolved by the r2/r3 rewrites.
+- **D18 Conductor rulings kept.**
+  - Dev server: a symlink whose real path leaves the served root is 404, and any dotfile path segment is 404, even under `css/`, `js/`, `assets/` (applies D9 and R-SEC-1).
+  - Test harness (H1): each browser spec has a deadline (`E2E_SPEC_TIMEOUT`, default 180 s), spec process groups are killed on deadline, exit and signals, and the CI job has `timeout-minutes: 20`.
+  - Device helper (K1 / Q-dhs1, Q-dhs2): auto-detect order is cec-ctl, then cec-client, then wlr-randr (the last only with `--helper-output`). Screen-on uses `cec-ctl --image-view-on` (verify on hardware). Error codes: 413 oversized body, 503 busy, no strategy or missing Wayland env, 504 timeout, 502 failed.
+- **D19 Minor findings shipped as is.**
+  - X1: a cross-site request to 127.0.0.1 for config.json gets 200, but no CORS header is sent, so no other site's page can read it. Cold M2/M3 stay as they are.
+  - H2: a non-numeric `E2E_SPEC_TIMEOUT` times every spec out.
+  - H3: the harness sweep comment wording.
