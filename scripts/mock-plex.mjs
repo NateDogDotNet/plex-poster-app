@@ -4,6 +4,8 @@
 // Control endpoints (no token needed):
 //   POST /__mock/play?ratingKey=3&user=demo   start a fake session
 //   POST /__mock/stop                         end it
+//   GET  /__mock/stats                        {transcode, other}: image requests vs other Plex requests
+//   POST /__mock/reset-stats                  zero those counters
 //   POST /__mock/down  /  POST /__mock/up      simulate the server going offline
 
 import { createServer } from 'node:http';
@@ -32,6 +34,7 @@ const MOVIES = [
 
 export async function startMockPlex({ port = 32401, host = '127.0.0.1' } = {}) {
   const state = { session: null, down: false };
+  const stats = { transcode: 0, other: 0 };
 
   const server = createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -50,6 +53,12 @@ export async function startMockPlex({ port = 32401, host = '127.0.0.1' } = {}) {
       if (action === 'stop') state.session = null;
       if (action === 'down') state.down = true;
       if (action === 'up') state.down = false;
+      if (action === 'stats') return json(200, { ...stats });
+      if (action === 'reset-stats') {
+        stats.transcode = 0;
+        stats.other = 0;
+        return json(200, { ok: true });
+      }
       return json(200, { ok: true, ...state });
     }
 
@@ -62,6 +71,7 @@ export async function startMockPlex({ port = 32401, host = '127.0.0.1' } = {}) {
       return res.end();
     }
     if (url.searchParams.get('X-Plex-Token') !== TOKEN) return json(401, { error: 'Unauthorized' });
+    stats[url.pathname === '/photo/:/transcode' ? 'transcode' : 'other']++;
 
     const strip = (m) => Object.fromEntries(Object.entries(m).filter(([k]) => k !== 'color'));
     const path = url.pathname;

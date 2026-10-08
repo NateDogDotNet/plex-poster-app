@@ -14,7 +14,7 @@ export const VERSION = '2.0.0';
 
 const storage = safeStorage();
 const log = createLog();
-const cache = createPosterCache({ storage });
+const cache = createPosterCache({ storage, limit: () => state.settings.posterCacheLimit });
 const display = createDisplay();
 const clientIdValue = getClientId(storage);
 const $ = (id) => document.getElementById(id);
@@ -60,15 +60,22 @@ function schedule(ms) {
   state.timer = setTimeout(() => tick(), ms);
 }
 
-async function fetchImage(poster) {
+const cachedBlobs = new WeakSet(); // blobs served from the poster cache (not freshly downloaded)
+
+async function fetchImage(poster, { skipCache = false } = {}) {
   const size = requestSize(display.posterSize(), window.devicePixelRatio || 1);
   const url = client.imageUrl(poster.thumb, size);
   if (state.directImages) return url;
+  const hit = skipCache ? null : await cache.lookup(poster, size).catch(() => null);
+  if (hit) {
+    cachedBlobs.add(hit);
+    return hit;
+  }
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout?.(20000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const blob = await res.blob();
-    cache.put(poster, blob).catch((err) => log.warn(`Could not cache poster: ${err.message}`));
+    cache.put(poster, blob, size).catch((err) => log.warn(`Could not cache poster: ${err.message}`));
     return blob;
   } catch (err) {
     // fetch() reports CORS blocks and a dead server the same way. If a plain <img> can
@@ -97,8 +104,17 @@ async function tick({ force = false } = {}) {
   try {
     const decision = await engine.decide({ force });
     if (decision) {
-      const image = await fetchImage(decision.poster);
-      await display.show(decision.poster, image);
+      let image = await fetchImage(decision.poster);
+      try {
+        await display.show(decision.poster, image);
+      } catch (err) {
+        if (!cachedBlobs.has(image)) throw err;
+        // The cached copy will not decode: drop it and download once (no retry loop).
+        log.warn(`Cached poster "${decision.poster.title}" is unreadable; downloading it again.`);
+        await cache.delete(decision.poster.ratingKey).catch(() => {});
+        image = await fetchImage(decision.poster, { skipCache: true });
+        await display.show(decision.poster, image);
+      }
       engine.shown(decision.poster);
       state.lastReason = decision.reason;
       log.info(`Showing "${decision.poster.title}" (${decision.reason})`);
