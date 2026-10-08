@@ -1,0 +1,8 @@
+{
+  "plexToken": "YOUR_PLEX_TOKEN",
+  "serverUrl": "http://192.168.1.10:32400",
+  "libraryKey": "1",
+  "username": "",
+  "rotateSeconds": 300,
+  "frameId": "marquee"
+}

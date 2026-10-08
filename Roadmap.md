@@ -1,54 +1,35 @@
 # Project Roadmap – Plex Poster Display
 
-This document outlines upcoming features and technical enhancements planned for the Plex Poster Display project. All listed improvements will maintain full compatibility with existing features including:
-- Standalone browser operation
-- Frame overlay support
-- First-run localStorage configuration
+## ✅ Done in 2.0 (PWA rewrite)
 
----
-## 🔜 Planned Enhancements
+- **Progressive web app**: manifest, icons, service worker, installable, auto-update
+- **Offline poster caching**: last 30 posters in the Cache API, rotated while Plex is unreachable, with an "offline" indicator
+- **Retry with backoff**: exponential backoff with jitter; status pill shows when the next retry happens
+- **Position and scale poster**: size, X/Y offset and fit mode, relative to the frame's window, with live preview
+- **Rotate display**: 0/90/180/270° via button, `O` key or settings
+- **Toggle now playing**: on/off, optional per-user filter, optional TV episodes
+- **Static poster**: pin the current poster from the controls; unpin from controls or settings
+- **Config import/export**: JSON file with optional token, plus `config.json` provisioning
+- **Pause refresh**: toggle with icon change, not persisted
+- Sign in with Plex (plex.tv/link PIN) and automatic server/connection discovery
+- Screen wake lock, auto-hiding cursor, keyboard shortcuts, diagnostics log
 
-### 1. Offline Poster Caching
-**Goal**: Improve robustness when Plex server is unavailable
-- Store last successfully loaded poster in `localStorage` or `IndexedDB`
-- Display cached poster during network outages
-- Show discreet "Offline Mode" indicator
+## 🔜 Ideas
 
-### 2. Retry Logic with Backoff
-**Goal**: Prevent script failure in low-connectivity conditions
-- Retry poster fetching with exponential backoff
-- Log fetch errors to console
-- Optionally show retry timer / status label in UI
+### Scheduled dimming / sleep
+Blank or dim the screen during configured hours (e.g. 1am–7am).
 
-### 3. Position and Scale Poster
-**Goal**: Allow users to adjust the display of poster realitive to the overlay frame
-- UI control to allow positioning of poster
-- UI control to allow the scaling of the poster realitive to the overlay frame
-- Save settings to `localStorage`
+### Multiple libraries
+Mix posters from several libraries (movies + TV) in the random pool.
 
-### 4. Rotate display
-**Goal**: Allow user to change between vertical or horzontal display
-- UI control to allow 90 degree rotation, of frame and poster, with every click
-- Store setting in 'localStorage'
+### Collections & filters
+Limit random posters to a Plex collection, genre or decade.
 
-### 5. Togle Now Playing Poster
-**Goal**: When a movie is being played, allows a setting to chose to show that poster insted of a random one
-- UI togle control in Setting panel
-- Store setting in `localStorage`
+### "Coming soon" mode
+Show recently added titles with a "Coming Soon" / "New Arrival" frame.
 
-### 6. Static Poster
-**Goal**: Allow user to choose just a single poster that does not change
-- Allow user to configure a setting that will not change the poster and set it to a specfic library item.
+### Playback progress
+Thin progress bar along the frame while something is playing.
 
-### 7. Config Import/Export
-**Goal**: Make it easy to clone setups across devices
-- Allow export of current config as a JSON file
-- Support drag-and-drop or file input to re-import a config
-- Validate and apply config to localStorage on import
-
-### 8. Pause Refresh
-**Goal**: Allow user to to pause and restart the auto refresh.
-- UI control quickly pause the refresh function
-- UI when paused and un-pused the icon for the control changes appropratly
-- Do Not Store setting in 'localStorage'
----
+### Remote control
+Change poster or settings from a phone on the same network.

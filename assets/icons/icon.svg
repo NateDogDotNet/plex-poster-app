@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<defs><radialGradient id="bulb"><stop offset="0" stop-color="#fff6c7"/><stop offset=".55" stop-color="#ffd257"/><stop offset="1" stop-color="#e5a00d"/></radialGradient>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3a1d07"/><stop offset="1" stop-color="#120802"/></linearGradient>
+<linearGradient id="poster" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2b2b30"/><stop offset="1" stop-color="#0b0b0d"/></linearGradient></defs>
+<rect x="24" y="24" width="464" height="464" rx="96" fill="url(#bg)"/>
+<rect x="91.4" y="49.6" width="329.3" height="412.8" rx="19.5" fill="#7a3a0c" stroke="#e5a00d" stroke-width="4.5"/>
+<rect x="135.5" y="93.8" width="240.9" height="324.4" rx="7.8" fill="url(#poster)"/>
+<circle cx="112.2" cy="70.4" r="13.0" fill="url(#bulb)"/>
+<circle cx="112.2" cy="441.6" r="13.0" fill="url(#bulb)"/>
+<circle cx="184.1" cy="70.4" r="13.0" fill="url(#bulb)"/>
+<circle cx="184.1" cy="441.6" r="13.0" fill="url(#bulb)"/>
+<circle cx="256.0" cy="70.4" r="13.0" fill="url(#bulb)"/>
+<circle cx="256.0" cy="441.6" r="13.0" fill="url(#bulb)"/>
+<circle cx="327.9" cy="70.4" r="13.0" fill="url(#bulb)"/>
+<circle cx="327.9" cy="441.6" r="13.0" fill="url(#bulb)"/>
+<circle cx="399.8" cy="70.4" r="13.0" fill="url(#bulb)"/>
+<circle cx="399.8" cy="441.6" r="13.0" fill="url(#bulb)"/>
+<circle cx="112.2" cy="132.3" r="13.0" fill="url(#bulb)"/>
+<circle cx="399.8" cy="132.3" r="13.0" fill="url(#bulb)"/>
+<circle cx="112.2" cy="194.1" r="13.0" fill="url(#bulb)"/>
+<circle cx="399.8" cy="194.1" r="13.0" fill="url(#bulb)"/>
+<circle cx="112.2" cy="256.0" r="13.0" fill="url(#bulb)"/>
+<circle cx="399.8" cy="256.0" r="13.0" fill="url(#bulb)"/>
+<circle cx="112.2" cy="317.9" r="13.0" fill="url(#bulb)"/>
+<circle cx="399.8" cy="317.9" r="13.0" fill="url(#bulb)"/>
+<circle cx="112.2" cy="379.7" r="13.0" fill="url(#bulb)"/>
+<circle cx="399.8" cy="379.7" r="13.0" fill="url(#bulb)"/>
+<path d="M210.8 195.7 L316.3 256.0 L210.8 316.3 Z" fill="#e5a00d" stroke="#e5a00d" stroke-width="15.1" stroke-linejoin="round"/>
+</svg>

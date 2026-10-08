@@ -1,0 +1,301 @@
+:root {
+  --accent: #e5a00d;
+  --accent-ink: #1a1200;
+  --panel: rgba(18, 18, 20, 0.94);
+  --panel-line: rgba(255, 255, 255, 0.12);
+  --text: #f2f2f2;
+  --muted: #a3a3a8;
+  --danger: #ff6b6b;
+  --radius: 12px;
+  --fade-ms: 1200ms;
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #000;
+  color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body.idle.hide-cursor, body.idle.hide-cursor * { cursor: none !important; }
+
+[hidden] { display: none !important; }
+
+/* ---------- Stage ---------- */
+
+.app {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.stage {
+  position: relative;
+  /* width/height/rotation are set from JS (see layout.js) */
+  transform: rotate(var(--rotation, 0deg));
+  transition: transform 0.5s ease;
+}
+
+.poster-box {
+  position: absolute;
+  overflow: hidden;
+  background: #000;
+}
+
+.poster-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: var(--poster-fit, cover);
+  opacity: 0;
+  transition: opacity var(--fade-ms) ease;
+}
+.poster-layer.active { opacity: 1; }
+
+.frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  user-select: none;
+}
+
+.title-card {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 18% 8% 5%;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+  text-align: center;
+  font-weight: 600;
+  font-size: clamp(14px, 2.6vmin, 34px);
+  text-shadow: 0 2px 6px #000, 0 0 2px #000;
+  pointer-events: none;
+}
+
+.empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.empty-card {
+  max-width: 420px;
+  text-align: center;
+  background: var(--panel);
+  border: 1px solid var(--panel-line);
+  border-radius: var(--radius);
+  padding: 28px;
+}
+.empty-card h1 { font-size: 1.4rem; margin: 12px 0 6px; }
+.empty-card p { color: var(--muted); margin: 0 0 18px; }
+
+/* ---------- Controls ---------- */
+
+.controls {
+  position: fixed;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  background: var(--panel);
+  border: 1px solid var(--panel-line);
+  border-radius: 999px;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.25s, transform 0.25s;
+  pointer-events: none;
+  z-index: 10;
+}
+.controls.visible { opacity: 1; transform: none; pointer-events: auto; }
+
+.controls button {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+.controls button:hover, .controls button:focus-visible { background: rgba(255, 255, 255, 0.12); outline: none; }
+.controls button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.controls svg, .btn svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.status-pill {
+  position: fixed;
+  left: max(12px, env(safe-area-inset-left));
+  top: max(12px, env(safe-area-inset-top));
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--panel-line);
+  font-size: 13px;
+  color: var(--muted);
+  z-index: 10;
+}
+.status-pill.warn { color: var(--accent); }
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 88px;
+  transform: translateX(-50%);
+  max-width: min(92vw, 520px);
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--panel-line);
+  z-index: 30;
+}
+.toast button { margin-left: 12px; }
+
+/* ---------- Sheets (dialogs) ---------- */
+
+.sheet {
+  position: fixed;
+  inset: 0 0 0 auto;
+  margin: 0;
+  width: min(440px, 100vw);
+  height: 100%;
+  max-height: none;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--panel-line);
+  background: var(--panel);
+  color: var(--text);
+  backdrop-filter: blur(8px);
+}
+.sheet::backdrop { background: rgba(0, 0, 0, 0.25); }
+.sheet[open] { display: flex; flex-direction: column; }
+.sheet > form { display: flex; flex-direction: column; height: 100%; }
+
+.sheet-head { padding: 18px 20px 6px; }
+.sheet-head h2 { margin: 0; font-size: 1.25rem; }
+.sheet-body { flex: 1; overflow-y: auto; padding: 8px 20px 20px; overscroll-behavior: contain; }
+.sheet-foot {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 12px 20px max(12px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--panel-line);
+}
+.sheet-foot .error { margin-right: auto; }
+
+fieldset {
+  border: 1px solid var(--panel-line);
+  border-radius: var(--radius);
+  margin: 14px 0 0;
+  padding: 10px 14px 14px;
+}
+legend { padding: 0 6px; font-weight: 600; color: var(--accent); }
+
+label { display: block; margin-top: 10px; }
+label.check { display: flex; gap: 8px; align-items: center; }
+label output { float: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+input[type="text"], input[type="url"], input[type="password"], input[type="number"], select {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--panel-line);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font: inherit;
+}
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }
+input:focus-visible, select:focus-visible, .btn:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.input-row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+.input-row input { margin-top: 0; }
+label .input-row { margin-top: 4px; }
+label .input-row input[type="number"] { width: 120px; }
+
+details { margin-top: 12px; }
+summary { cursor: pointer; color: var(--muted); }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--panel-line);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn:hover { background: rgba(255, 255, 255, 0.14); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.danger { color: var(--danger); }
+.btn.small { padding: 4px 10px; font-size: 13px; }
+.btn:disabled { opacity: 0.5; cursor: progress; }
+
+.signin-panel {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(229, 160, 13, 0.08);
+  border: 1px solid rgba(229, 160, 13, 0.3);
+  text-align: center;
+}
+.signin-panel p { margin: 4px 0; }
+.signin-panel a { color: var(--accent); }
+.pin-code { font: 700 2.2rem/1.2 ui-monospace, Menlo, Consolas, monospace; letter-spacing: 0.3em; color: var(--accent); }
+
+.pinned { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-top: 12px; }
+.button-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; align-items: center; }
+.button-grid label.check { margin: 0; }
+
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.error { color: var(--danger); font-size: 13px; }
+
+.diag-list { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 8px 0; font-size: 13px; }
+.diag-list dt { color: var(--muted); }
+.diag-list dd { margin: 0; word-break: break-word; font-variant-numeric: tabular-nums; }
+.diag-log { margin: 0; padding-left: 0; list-style: none; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; }
+.diag-log li { padding: 3px 0; border-bottom: 1px solid var(--panel-line); }
+.diag-log .warn { color: var(--accent); }
+.diag-log .error { color: var(--danger); }
+
+.noscript { position: fixed; inset: 0; display: grid; place-items: center; }
+
+@media (prefers-reduced-motion: reduce) {
+  .poster-layer, .stage, .controls { transition: none; }
+}
+
+/* Scrollable regions are focusable in Chromium; the ring around the whole panel is noise. */
+.sheet:focus, .sheet-body:focus, .sheet-body:focus-visible { outline: none; }
