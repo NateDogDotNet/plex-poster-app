@@ -4,3 +4,6 @@ config.json
 node_modules/
 .DS_Store
 Thumbs.db
+
+# integration-orchestrator audit trail (local)
+.orchestrator/
