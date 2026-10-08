@@ -7,20 +7,16 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - run: npm ci
       - run: npm test
-      - name: Every file the service worker precaches exists
-        run: |
-          node -e '
-            const fs = require("fs");
-            const src = fs.readFileSync("sw.js", "utf8");
-            const list = src.match(/const SHELL = \[([\s\S]*?)\];/)[1].match(/'"'"'([^'"'"']+)'"'"'/g).map((s) => s.slice(1, -1));
-            const missing = list.filter((p) => p !== "./" && !fs.existsSync(p));
-            const js = fs.readdirSync("js").map((f) => "js/" + f).filter((f) => !list.includes(f));
-            if (missing.length || js.length) { console.error({ missing, notPrecached: js }); process.exit(1); }
-            console.log(list.length + " precached files OK");
-          '
+      - name: Every file the service worker precaches exists, and every js/ file is precached
+        run: node scripts/check-precache.mjs
+      - name: Install Chromium for the browser tests
+        run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
