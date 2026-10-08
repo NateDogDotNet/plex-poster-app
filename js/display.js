@@ -70,6 +70,15 @@ export function createDisplay(root = document) {
     el.stage.style.height = `${height}px`;
     el.stage.style.setProperty('--rotation', `${settings.rotation}deg`);
 
+    // The UI shell follows the stage unless rotateUi is off (OS-level rotation). --vw/--vh are the
+    // screen's size as the viewer sees it, used by the controls, toast and top-layer dialogs.
+    const uiRotation = settings.rotateUi === false ? 0 : settings.rotation;
+    const uiSideways = uiRotation === 90 || uiRotation === 270;
+    const rootStyle = document.documentElement.style;
+    rootStyle.setProperty('--ui-rotation', `${uiRotation}deg`);
+    rootStyle.setProperty('--vw', `${uiSideways ? window.innerHeight : window.innerWidth}px`);
+    rootStyle.setProperty('--vh', `${uiSideways ? window.innerWidth : window.innerHeight}px`);
+
     const box = posterBox({
       stageW: width,
       stageH: height,
@@ -85,7 +94,7 @@ export function createDisplay(root = document) {
       height: `${box.height}px`,
     });
     el.box.style.setProperty('--poster-fit', settings.posterFit);
-    document.documentElement.style.setProperty('--fade-ms', `${settings.crossfadeMs}ms`);
+    rootStyle.setProperty('--fade-ms', `${settings.crossfadeMs}ms`);
     return box;
   }
 

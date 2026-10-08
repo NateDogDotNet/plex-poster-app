@@ -8,6 +8,11 @@
   --danger: #ff6b6b;
   --radius: 12px;
   --fade-ms: 1200ms;
+  /* Set by display.layout(): the UI rotation (0 when rotateUi is off) and the size of the screen
+     as the viewer sees it (width/height swap at 90/270). */
+  --ui-rotation: 0deg;
+  --vw: 100vw;
+  --vh: 100vh;
   color-scheme: dark;
 }
 
@@ -32,14 +37,17 @@ body.idle.hide-cursor, body.idle.hide-cursor * { cursor: none !important; }
 .app {
   position: fixed;
   inset: 0;
-  display: grid;
-  place-items: center;
+  overflow: hidden;
 }
 
 .stage {
-  position: relative;
-  /* width/height/rotation are set from JS (see layout.js) */
-  transform: rotate(var(--rotation, 0deg));
+  /* Centred by position, not by grid: a grid row would size itself to the unrotated layout box. */
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  /* width/height/rotation are set from JS (see layout.js). Pixel shift uses the separate
+     `translate` property, which composes before this transform. */
+  transform: translate(-50%, -50%) rotate(var(--rotation, 0deg));
   transition: transform 0.5s ease;
 }
 
@@ -91,6 +99,8 @@ body.idle.hide-cursor, body.idle.hide-cursor * { cursor: none !important; }
   padding: 24px;
 }
 .empty-card {
+  transform: rotate(var(--ui-rotation));
+  transition: transform 0.5s ease;
   max-width: 420px;
   text-align: center;
   background: var(--panel);
@@ -104,9 +114,14 @@ body.idle.hide-cursor, body.idle.hide-cursor * { cursor: none !important; }
 /* ---------- Controls ---------- */
 
 .controls {
+  /* Anchored at the viewport centre, then moved to the viewer's bottom-right corner in the
+     rotated frame: rotate(ui) translate(corner offset). */
   position: fixed;
-  right: max(12px, env(safe-area-inset-right));
-  bottom: max(12px, env(safe-area-inset-bottom));
+  left: 50%;
+  top: 50%;
+  width: max-content;
+  transform-origin: 0 0;
+  --nudge: 8px;
   display: flex;
   gap: 8px;
   padding: 8px;
@@ -114,12 +129,13 @@ body.idle.hide-cursor, body.idle.hide-cursor * { cursor: none !important; }
   border: 1px solid var(--panel-line);
   border-radius: 999px;
   opacity: 0;
-  transform: translateY(8px);
+  transform: rotate(var(--ui-rotation)) translate(0, var(--nudge))
+    translate(calc(var(--vw) / 2 - max(12px, env(safe-area-inset-right)) - 100%), calc(var(--vh) / 2 - max(12px, env(safe-area-inset-bottom)) - 100%));
   transition: opacity 0.25s, transform 0.25s;
   pointer-events: none;
   z-index: 10;
 }
-.controls.visible { opacity: 1; transform: none; pointer-events: auto; }
+.controls.visible { --nudge: 0px; opacity: 1; pointer-events: auto; }
 
 .controls button {
   width: 44px;
@@ -146,8 +162,13 @@ body.idle.hide-cursor, body.idle.hide-cursor * { cursor: none !important; }
 
 .status-pill {
   position: fixed;
-  left: max(12px, env(safe-area-inset-left));
-  top: max(12px, env(safe-area-inset-top));
+  left: 50%;
+  top: 50%;
+  width: max-content;
+  transform-origin: 0 0;
+  transform: rotate(var(--ui-rotation))
+    translate(calc(var(--vw) / -2 + max(12px, env(safe-area-inset-left))), calc(var(--vh) / -2 + max(12px, env(safe-area-inset-top))));
+  transition: transform 0.5s ease;
   padding: 6px 12px;
   border-radius: 999px;
   background: var(--panel);
@@ -161,9 +182,10 @@ body.idle.hide-cursor, body.idle.hide-cursor * { cursor: none !important; }
 .toast {
   position: fixed;
   left: 50%;
-  bottom: 88px;
-  transform: translateX(-50%);
-  max-width: min(92vw, 520px);
+  top: 50%;
+  transform-origin: 0 0;
+  transform: rotate(var(--ui-rotation)) translate(-50%, calc(var(--vh) / 2 - 88px - 100%));
+  max-width: min(calc(var(--vw) * 0.92), 520px);
   padding: 10px 16px;
   border-radius: 10px;
   background: var(--panel);
@@ -175,12 +197,20 @@ body.idle.hide-cursor, body.idle.hide-cursor * { cursor: none !important; }
 /* ---------- Sheets (dialogs) ---------- */
 
 .sheet {
+  /* Top-layer dialogs ignore ancestor transforms, so each carries its own rotation. The box is
+     laid out in the viewer's frame (--vw x --vh), then rotated about the viewport centre so the
+     sheet docks to the viewer's right edge. The ::backdrop stays full-screen. */
   position: fixed;
-  inset: 0 0 0 auto;
+  inset: auto;
+  left: 50%;
+  top: 50%;
   margin: 0;
-  width: min(440px, 100vw);
-  height: 100%;
+  width: min(440px, var(--vw));
+  height: var(--vh);
+  max-width: none;
   max-height: none;
+  transform-origin: 0 0;
+  transform: rotate(var(--ui-rotation)) translate(calc(var(--vw) / 2 - 100%), calc(var(--vh) / -2));
   padding: 0;
   border: 0;
   border-left: 1px solid var(--panel-line);
@@ -294,7 +324,7 @@ summary { cursor: pointer; color: var(--muted); }
 .noscript { position: fixed; inset: 0; display: grid; place-items: center; }
 
 @media (prefers-reduced-motion: reduce) {
-  .poster-layer, .stage, .controls { transition: none; }
+  .poster-layer, .stage, .controls, .empty-card, .status-pill { transition: none; }
 }
 
 /* Scrollable regions are focusable in Chromium; the ring around the whole panel is noise. */
