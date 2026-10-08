@@ -9,9 +9,18 @@ const num = (min, max) => (v, d) => {
   const n = Number(v);
   return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : d;
 };
+/** Strict numeric sanitiser for the keys added in 2.1: junk (non-numbers, booleans, arrays, blank strings) gives the default; finite numbers clamp; `int` rounds. */
+const strictNum = (min, max, { int = false } = {}) => (v, d) => {
+  if (typeof v !== 'number' && !(typeof v === 'string' && v.trim() !== '')) return d;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return d;
+  return Math.min(max, Math.max(min, int ? Math.round(n) : n));
+};
 const bool = (v, d) => (typeof v === 'boolean' ? v : v === 'true' ? true : v === 'false' ? false : d);
 const str = (v, d) => (typeof v === 'string' ? v.trim() : d);
 const oneOf = (...allowed) => (v, d) => (allowed.includes(v) ? v : d);
+const hhmm = (v, d) => (typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v) ? v : d);
+const hex = (v, d) => (typeof v === 'string' && /^[0-9a-f]*$/i.test(v) ? v : d);
 const rotation = (v, d) => {
   const n = Number(v);
   return [0, 90, 180, 270].includes(n) ? n : d;
@@ -53,10 +62,55 @@ const SCHEMA = {
   // Device
   keepAwake: [true, bool],
   hideCursor: [true, bool],
+
+  // Display, orientation and status
+  rotateUi: [true, bool],
+  statusIndicator: ['dot', oneOf('dot', 'off')],
+  controlLabels: ['auto', oneOf('auto', 'always', 'never')],
+  fillMode: ['none', oneOf('none', 'blur', 'info')],
+
+  // Cache
+  posterCacheLimit: [100, strictNum(10, 300, { int: true })],
+
+  // Content filter
+  maxContentRating: ['', oneOf('', 'G', 'PG', 'PG-13', 'R', 'NC-17')],
+  limitNowPlaying: [true, bool],
+
+  // Display protection
+  sleepEnabled: [false, bool],
+  sleepStart: ['01:00', hhmm],
+  sleepEnd: ['07:00', hhmm],
+  idleSleepHours: [0, strictNum(0, 48, { int: true })],
+  wakeOnPlayback: [true, bool],
+  pixelShift: [true, bool],
+  pixelShiftMinutes: [3, strictNum(1, 60, { int: true })],
+  frameBrightness: [100, strictNum(10, 100)],
+  nightDim: [false, bool],
+  nightDimStart: ['22:00', hhmm],
+  nightDimEnd: ['07:00', hhmm],
+  nightDimLevel: [60, strictNum(10, 100)],
+  nightDimTarget: ['frame', oneOf('frame', 'stage')],
+  dailyReload: [true, bool],
+  dailyReloadTime: ['04:00', hhmm],
+
+  // Kiosk
+  kioskMode: [false, bool],
+  disableShortcuts: [false, bool],
+  settingsPinHash: ['', hex],
+  settingsPinSalt: ['', hex],
+  deviceHelper: [false, bool],
+
+  // Now playing
+  showMeta: [false, bool],
+  showProgress: [true, bool],
+  showPlayer: [false, bool],
 };
 
 /** Keys that hold secrets and are optional on export. */
 export const SECRET_KEYS = ['plexToken'];
+
+/** PIN material: never written to an export and never accepted from an import file. */
+export const NEVER_EXPORT_KEYS = ['settingsPinHash', 'settingsPinSalt'];
 
 export function defaults() {
   return Object.fromEntries(Object.entries(SCHEMA).map(([k, [d]]) => [k, d]));
@@ -141,6 +195,7 @@ export function save(storage, settings) {
 export function toExport(settings, { includeSecrets = false } = {}) {
   const data = sanitize(settings);
   if (!includeSecrets) for (const k of SECRET_KEYS) delete data[k];
+  for (const k of NEVER_EXPORT_KEYS) delete data[k];
   return { format: EXPORT_FORMAT, version: EXPORT_VERSION, exportedAt: new Date().toISOString(), settings: data };
 }
 
@@ -165,7 +220,7 @@ export function fromImport(text, current = defaults()) {
     incoming = parsed.settings || {};
   }
   incoming = translateLegacyShape(incoming);
-  const known = Object.keys(incoming).filter((k) => k in SCHEMA);
+  const known = Object.keys(incoming).filter((k) => k in SCHEMA && !NEVER_EXPORT_KEYS.includes(k));
   if (known.length === 0) throw new Error('No recognised settings in file.');
   const merged = { ...current };
   for (const k of known) merged[k] = incoming[k];

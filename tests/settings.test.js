@@ -93,3 +93,123 @@ test('import rejects bad files with a readable message', () => {
   assert.throws(() => fromImport('{"hello":1}'), /No recognised settings/);
   assert.throws(() => fromImport(JSON.stringify({ format: 'plex-poster-display/settings', version: 99, settings: {} })), /newer version/);
 });
+
+// ---- settings-and-schedule-core: new keys ----
+
+import { NEVER_EXPORT_KEYS, EXPORT_VERSION } from '../js/settings.js';
+
+const NEW_DEFAULTS = {
+  rotateUi: true, statusIndicator: 'dot', posterCacheLimit: 100, maxContentRating: '', limitNowPlaying: true,
+  sleepEnabled: false, sleepStart: '01:00', sleepEnd: '07:00', idleSleepHours: 0, wakeOnPlayback: true,
+  pixelShift: true, pixelShiftMinutes: 3, frameBrightness: 100, nightDim: false, nightDimStart: '22:00',
+  nightDimEnd: '07:00', nightDimLevel: 60, nightDimTarget: 'frame', dailyReload: true, dailyReloadTime: '04:00',
+  kioskMode: false, disableShortcuts: false, settingsPinHash: '', settingsPinSalt: '', deviceHelper: false,
+  controlLabels: 'auto', showMeta: false, showProgress: true, showPlayer: false, fillMode: 'none',
+};
+
+test('defaults table for the new keys', () => {
+  const d = defaults();
+  for (const [k, v] of Object.entries(NEW_DEFAULTS)) assert.deepEqual(d[k], v, k);
+});
+
+test('deferred keys do not exist', () => {
+  const d = defaults();
+  for (const k of ['bulbAnimation', 'frameRotation', 'frameRotationIds', 'frameIdRandom', 'fillCount']) assert.equal(k in d, false, k);
+  assert.equal(sanitize({ fillMode: 'multi' }).fillMode, 'none');
+});
+
+test('hhmm sanitiser accepts HH:MM and falls back otherwise', () => {
+  assert.equal(sanitize({ sleepStart: '00:00' }).sleepStart, '00:00');
+  assert.equal(sanitize({ sleepStart: '23:59' }).sleepStart, '23:59');
+  for (const bad of ['24:00', '12:60', '7:00', '0700', 'ab:cd', '', 5, true, '12:00:00', ' 1:00']) {
+    assert.equal(sanitize({ sleepStart: bad }).sleepStart, '01:00', String(bad));
+    assert.equal(sanitize({ nightDimEnd: bad }).nightDimEnd, '07:00', String(bad));
+    assert.equal(sanitize({ dailyReloadTime: bad }).dailyReloadTime, '04:00', String(bad));
+  }
+});
+
+test('numeric ranges clamp finite numbers; junk falls back to the default; counts round', () => {
+  assert.equal(sanitize({ posterCacheLimit: 1 }).posterCacheLimit, 10);
+  assert.equal(sanitize({ posterCacheLimit: 9999 }).posterCacheLimit, 300);
+  assert.equal(sanitize({ idleSleepHours: 99 }).idleSleepHours, 48);
+  assert.equal(sanitize({ idleSleepHours: -1 }).idleSleepHours, 0);
+  assert.equal(sanitize({ pixelShiftMinutes: 0 }).pixelShiftMinutes, 1);
+  assert.equal(sanitize({ pixelShiftMinutes: 500 }).pixelShiftMinutes, 60);
+  assert.equal(sanitize({ frameBrightness: 0 }).frameBrightness, 10);
+  assert.equal(sanitize({ nightDimLevel: 1000 }).nightDimLevel, 100);
+  assert.equal(sanitize({ nightDimLevel: 'x' }).nightDimLevel, 60);
+  // numeric strings (form fields) are accepted
+  assert.equal(sanitize({ posterCacheLimit: '50' }).posterCacheLimit, 50);
+  // junk -> default, not the minimum
+  for (const junk of ['', '  ', true, false, [], [5], {}, 'abc', NaN, Infinity, -Infinity]) {
+    const s = sanitize({ posterCacheLimit: junk, idleSleepHours: junk, pixelShiftMinutes: junk, frameBrightness: junk, nightDimLevel: junk });
+    assert.equal(s.posterCacheLimit, 100, `posterCacheLimit ${String(junk)}`);
+    assert.equal(s.idleSleepHours, 0, `idleSleepHours ${String(junk)}`);
+    assert.equal(s.pixelShiftMinutes, 3, `pixelShiftMinutes ${String(junk)}`);
+    assert.equal(s.frameBrightness, 100, `frameBrightness ${String(junk)}`);
+    assert.equal(s.nightDimLevel, 60, `nightDimLevel ${String(junk)}`);
+  }
+  // count keys round to integers
+  assert.equal(sanitize({ posterCacheLimit: 10.5 }).posterCacheLimit, 11);
+  assert.equal(sanitize({ posterCacheLimit: '99.4' }).posterCacheLimit, 99);
+  assert.equal(sanitize({ idleSleepHours: 2.6 }).idleSleepHours, 3);
+  assert.equal(sanitize({ pixelShiftMinutes: 2.2 }).pixelShiftMinutes, 2);
+  // existing 2.0 keys keep their clamping behaviour
+  assert.equal(sanitize({ rotateSeconds: 1 }).rotateSeconds, 10);
+});
+
+test('enumerations fall back to the default', () => {
+  assert.equal(sanitize({ statusIndicator: 'text' }).statusIndicator, 'dot');
+  assert.equal(sanitize({ statusIndicator: 'off' }).statusIndicator, 'off');
+  for (const r of ['', 'G', 'PG', 'PG-13', 'R', 'NC-17']) assert.equal(sanitize({ maxContentRating: r }).maxContentRating, r);
+  assert.equal(sanitize({ maxContentRating: 'X' }).maxContentRating, '');
+  assert.equal(sanitize({ nightDimTarget: 'stage' }).nightDimTarget, 'stage');
+  assert.equal(sanitize({ nightDimTarget: 'x' }).nightDimTarget, 'frame');
+  for (const c of ['auto', 'always', 'never']) assert.equal(sanitize({ controlLabels: c }).controlLabels, c);
+  assert.equal(sanitize({ controlLabels: 'x' }).controlLabels, 'auto');
+  for (const f of ['none', 'blur', 'info']) assert.equal(sanitize({ fillMode: f }).fillMode, f);
+});
+
+test('PIN material sanitiser accepts hex only', () => {
+  assert.equal(sanitize({ settingsPinHash: 'ab12' }).settingsPinHash, 'ab12');
+  assert.equal(sanitize({ settingsPinHash: 'zz' }).settingsPinHash, '');
+  assert.equal(sanitize({ settingsPinSalt: 5 }).settingsPinSalt, '');
+});
+
+test('NEVER_EXPORT_KEYS is exactly the two PIN keys and export drops them', () => {
+  assert.deepEqual(NEVER_EXPORT_KEYS, ['settingsPinHash', 'settingsPinSalt']);
+  const s = { ...defaults(), plexToken: 't', settingsPinHash: 'a'.repeat(64), settingsPinSalt: 'bb' };
+  for (const opts of [undefined, { includeSecrets: true }]) {
+    const o = toExport(s, opts).settings;
+    for (const k of NEVER_EXPORT_KEYS) assert.equal(k in o, false, k);
+  }
+  assert.equal(toExport(s, { includeSecrets: true }).settings.plexToken, 't');
+  assert.equal(EXPORT_VERSION, 1);
+});
+
+test('import cannot plant or clear a PIN', () => {
+  const file = JSON.stringify({ format: 'plex-poster-display/settings', version: 1, settings: { settingsPinHash: 'a'.repeat(64), settingsPinSalt: 'b', rotateSeconds: 60 } });
+  const s = fromImport(file);
+  assert.equal(s.settingsPinHash, '');
+  assert.equal(s.settingsPinSalt, '');
+  assert.equal(s.rotateSeconds, 60);
+  assert.equal(s.pixelShift, true);
+  const kept = fromImport(file, { ...defaults(), settingsPinHash: 'cc', settingsPinSalt: 'dd' });
+  assert.equal(kept.settingsPinHash, 'cc');
+  assert.equal(kept.settingsPinSalt, 'dd');
+  // only PIN keys in the file: nothing recognised
+  assert.throws(() => fromImport({ settingsPinHash: 'aa' }), /No recognised settings/);
+});
+
+test('a 2.0.0 export imports with the new keys at their defaults', () => {
+  const old = { format: 'plex-poster-display/settings', version: 1, settings: { rotateSeconds: 90, rotation: 180 } };
+  const s = fromImport(JSON.stringify(old));
+  assert.equal(s.rotation, 180);
+  for (const [k, v] of Object.entries(NEW_DEFAULTS)) assert.deepEqual(s[k], v, k);
+});
+
+test('stored 2.0.0 settings load with new keys filled', () => {
+  const { settings } = load(memoryStorage({ [STORAGE_KEY]: JSON.stringify({ rotateSeconds: 60 }) }));
+  assert.equal(settings.rotateSeconds, 60);
+  assert.equal(settings.pixelShift, true);
+});
