@@ -38,3 +38,16 @@ Decisions that bind the integration plan (`docs/integration-plan.md`) and spec (
   - X1: a cross-site request to 127.0.0.1 for config.json gets 200, but no CORS header is sent, so no other site's page can read it. Cold M2/M3 stay as they are.
   - H2: a non-numeric `E2E_SPEC_TIMEOUT` times every spec out.
   - H3: the harness sweep comment wording.
+
+## Stop 4 — 2026-10-09, owner answer "Defaults" (items 1–3; item 4, token rotation, still open)
+
+- **D20 Device helper past the retry cap.** One more owner-authorised round for `device-helper-server`, limited to: a test that the real process-group liveness check sees a live member (A6-1), a per-test time limit on the deadline test (A6-2), and refusing to start when a helper option is given without a value (C6-3). Shipped as is: A6-3 (a successful command whose background child holds stdout gets 504; the group is still killed), A6-4 (the reply waits up to 10 s only when a member survives SIGKILL), C6-1 (`setsid` escapes a process-group kill), C6-2 (no SIGTERM handler in `serve.mjs`; under systemd `KillMode=control-group` stopping the service kills the command — the `docs` phase says so), C6-4 (theoretical pid-reuse window in the post-command kill).
+- **D21 Conductor rulings kept.**
+  - K2: helper status names the temperature source (`thermal_zone0`, `vcgencmd` or null).
+  - K3: new numeric settings — junk or blank → default, out of range → clamp, counts rounded.
+  - K4: a cached poster that fails to decode is deleted and downloaded once; no retry loop.
+  - K5: offline `cache.random()` can return a corrupt entry; fixed in `content-rating-filter`, which edits that function.
+  - K7: the sleep e2e "wake lock held" check is `__wakeLock.held === 1` with `releases` unchanged (the stub counts).
+  - K8: after every helper command, success or failure, its process group is killed and awaited before the lock is released.
+  - K9: playback always restarts the idle-sleep clock (`wakeOnPlayback:false` keeps only the scheduled veil); Pause stops playback-wake polling; open Settings/Diagnostics dialogs render above the veil.
+- **D22 No poster blacklist (K6).** A poster whose image keeps failing to decode is downloaded once per rotation and skipped; the app does not stop trying it.
