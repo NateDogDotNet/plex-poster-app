@@ -7,6 +7,10 @@
 //   node scripts/serve.mjs --host 0.0.0.0  # reachable from other devices on the LAN
 //   node scripts/serve.mjs --mock          # plus a fake Plex server on :32401 for demos/tests
 //   node scripts/serve.mjs --root <dir>    # serve <dir> instead of the repo root (tests)
+//   node scripts/serve.mjs --helper        # opt-in loopback device helper (screen power, CPU temp)
+//       --helper-power cec-ctl|cec-client|wlr-randr|none   (default: auto-detect)
+//       --helper-output <name>  --helper-wayland-display <name>  --helper-xdg-runtime-dir <dir>
+//       --helper-fake           # with --helper: record calls, run nothing (tests)
 //
 // Only an allowlist of app paths is served. config.json (the Plex token) goes only to a
 // loopback peer whose Host is localhost, 127.0.0.1 or [::1]; everything else is 404.
@@ -19,6 +23,7 @@ import { readFile, stat, realpath } from 'node:fs/promises';
 import { extname, join, resolve, sep, posix, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isLoopback, isLoopbackHost } from './net.mjs';
+import { createHelper } from './device-helper.mjs';
 
 const args = process.argv.slice(2);
 const opt = (name, fallback) => {
@@ -50,7 +55,35 @@ const isAppPath = (p) =>
   (FILES.has(p) || DIRS.some((d) => p.startsWith(d))) && !p.split('/').some((seg) => seg.startsWith('.'));
 const REAL_ROOT = await realpath(ROOT).catch(() => ROOT);
 
+// Without --helper the /__helper/ routes do not exist (they fall through to the 404 below).
+// --helper-fake alone does not enable the helper.
+let helper = null;
+if (args.includes('--helper')) {
+  // opt() falls back to a default for a missing value; for these options that would silently mean
+  // auto-detect, so a value option that is present without a value refuses to start instead.
+  for (const name of ['helper-power', 'helper-output', 'helper-wayland-display', 'helper-xdg-runtime-dir']) {
+    const i = args.indexOf(`--${name}`);
+    if (i >= 0 && (!args[i + 1] || args[i + 1].startsWith('--'))) {
+      console.error(`device helper: --${name} needs a value`);
+      process.exit(1);
+    }
+  }
+  try {
+    helper = await createHelper({
+      power: opt('helper-power'),
+      output: opt('helper-output'),
+      waylandDisplay: opt('helper-wayland-display'),
+      xdgRuntimeDir: opt('helper-xdg-runtime-dir'),
+      fake: args.includes('--helper-fake'),
+    });
+  } catch (e) {
+    console.error(e.message);
+    process.exit(1);
+  }
+}
+
 createServer(async (req, res) => {
+  if (helper?.handle(req, res)) return;
   try {
     // Normalise first (decode, resolve . and .., collapse //, strip trailing slash), check second.
     const raw = decodeURIComponent(req.url.split(/[?#]/)[0]);
