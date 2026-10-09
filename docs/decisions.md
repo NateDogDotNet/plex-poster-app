@@ -51,3 +51,17 @@ Decisions that bind the integration plan (`docs/integration-plan.md`) and spec (
   - K8: after every helper command, success or failure, its process group is killed and awaited before the lock is released.
   - K9: playback always restarts the idle-sleep clock (`wakeOnPlayback:false` keeps only the scheduled veil); Pause stops playback-wake polling; open Settings/Diagnostics dialogs render above the veil.
 - **D22 No poster blacklist (K6).** A poster whose image keeps failing to decode is downloaded once per rotation and skipped; the app does not stop trying it.
+
+## Stop 5 — 2026-10-09, owner answer "Defaults" (items 1–4; item 5, token rotation, still open)
+
+- **D23 Sleep mode past the retry cap.** One more owner-authorised round for `sleep-mode`, limited to: the clock-step correction must not re-shift a timestamp written after the step (C6I1, with a regression test that steps the clock and writes a timestamp in the same second); no playback polling when its answer cannot matter, i.e. poll only when `(sleepEnabled && wakeOnPlayback) || idleSleepHours > 0` (C6M1); a poster fetch already in flight when sleep starts is not drawn under the veil (C6M3). Shipped as is: C6M2 (Pause during a movie keeps the display awake while paused; consistent with K9) and C6M4 (no assistive-tech announcement of sleep).
+- **D24 Conductor rulings kept.**
+  - K10: a value-less helper option refuses to start only with `--helper`; without it the option is inert.
+  - K11 (amended): a failed playback poll keeps the last playing state for at most 3 consecutive failures, then counts as not playing; it never refreshes `lastPlaybackAt` and is never fatal.
+  - K12: any pointer/key activity during a manual wake restarts the 60 s, dialogs included; input aimed at an open dialog is never swallowed.
+  - K13: page load and every settings save restart the idle-sleep clock.
+  - K14: while asleep the playback poll retries no slower than `nowPlayingPollSeconds`.
+  - K16: the service-worker update timer crash under a fake clock (js/main.js) goes to `pi-stability`.
+  - K18: with `showNowPlaying` on, a 401/403 on /status/sessions leaves no poster via `engine.decide()`; goes to `metadata-and-now-playing`.
+- **D25 No wake fade for now (K15).** Waking stays a hard cut; judged on the real screen during hardware validation (`frame-brightness` / night dim are the natural home).
+- **D26 Option spelling (K17).** `serve.mjs` options keep the space form only (`--helper-power cec-ctl`); the `docs` phase shows that form.
