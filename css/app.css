@@ -194,6 +194,18 @@ body.idle.hide-cursor, body.idle.hide-cursor * { cursor: none !important; }
 }
 .toast button { margin-left: 12px; }
 
+/* ---------- Sleep ---------- */
+
+/* Pure black over everything except top-layer dialogs. The wake lock stays held (D4). */
+.sleep-veil {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  z-index: 100;
+  cursor: none;
+}
+body.asleep .controls, body.asleep .status-pill, body.asleep .toast { visibility: hidden; }
+
 /* ---------- Sheets (dialogs) ---------- */
 
 .sheet {

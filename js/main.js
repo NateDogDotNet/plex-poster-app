@@ -6,8 +6,10 @@ import { createEngine } from './engine.js';
 import { createPlexClient } from './plex.js';
 import { createPosterCache } from './poster-cache.js';
 import { requestSize } from './layout.js';
+import { isPlausibleClock } from './schedule.js';
 import { createSettingsUI } from './settings-ui.js';
 import { fromImport, isConfigured, load, save, STORAGE_KEY } from './settings.js';
+import { decideSleep, MANUAL_WAKE_MS } from './sleep.js';
 import { clientId as getClientId, createLog, formatDuration, safeStorage, toast } from './util.js';
 
 export const VERSION = '2.0.0';
@@ -31,6 +33,15 @@ const state = {
   directImages: false, // set when the server doesn't allow fetching images (CORS)
   wakeLock: null,
   busy: false,
+  asleep: false,
+  sleepWhy: '', // 'schedule' | 'idle' | 'manual wake' | ''
+  playing: false, // the last poll saw a matching session (only polled while sleep needs it)
+  lastPlaybackAt: Date.now(),
+  manualWakeUntil: 0,
+  swallowUntil: 0, // performance.now() until which clicks are swallowed (after a press that only woke the display)
+  pollFailing: false,
+  pollFailures: 0, // consecutive failed playback polls
+  sleepClock: { wall: Date.now(), mono: performance.now() },
 };
 
 let client = null;
@@ -49,7 +60,7 @@ function rebuildClient() {
 function intervalMs() {
   const s = state.settings;
   const rotate = s.rotateSeconds * 1000;
-  return s.showNowPlaying ? Math.min(rotate, s.nowPlayingPollSeconds * 1000) : rotate;
+  return s.showNowPlaying || playbackMatters(s) ? Math.min(rotate, s.nowPlayingPollSeconds * 1000) : rotate;
 }
 
 function schedule(ms) {
@@ -102,22 +113,27 @@ async function tick({ force = false } = {}) {
   if (!engine || state.busy) return;
   state.busy = true;
   try {
-    const decision = await engine.decide({ force });
+    const sessions = await pollPlayback(); // fetched once; decide() reuses it
+    // Asleep: Plex is polled above, but no poster is chosen, fetched or shown.
+    const decision = state.asleep ? null : await engine.decide({ force, sessions });
     if (decision) {
       let image = await fetchImage(decision.poster);
-      try {
-        await display.show(decision.poster, image);
-      } catch (err) {
-        if (!cachedBlobs.has(image)) throw err;
-        // The cached copy will not decode: drop it and download once (no retry loop).
-        log.warn(`Cached poster "${decision.poster.title}" is unreadable; downloading it again.`);
-        await cache.delete(decision.poster.ratingKey).catch(() => {});
-        image = await fetchImage(decision.poster, { skipCache: true });
-        await display.show(decision.poster, image);
+      if (!state.asleep) {
+        // (Asleep by now: the download began before sleep did; it is not drawn under the veil.)
+        try {
+          await display.show(decision.poster, image);
+        } catch (err) {
+          if (!cachedBlobs.has(image)) throw err;
+          // The cached copy will not decode: drop it and download once (no retry loop).
+          log.warn(`Cached poster "${decision.poster.title}" is unreadable; downloading it again.`);
+          await cache.delete(decision.poster.ratingKey).catch(() => {});
+          image = await fetchImage(decision.poster, { skipCache: true });
+          await display.show(decision.poster, image);
+        }
+        engine.shown(decision.poster);
+        state.lastReason = decision.reason;
+        log.info(`Showing "${decision.poster.title}" (${decision.reason})`);
       }
-      engine.shown(decision.poster);
-      state.lastReason = decision.reason;
-      log.info(`Showing "${decision.poster.title}" (${decision.reason})`);
     }
     state.lastSuccessAt = Date.now();
     if (state.offlineSince) log.info(`Back online after ${formatDuration(Date.now() - state.offlineSince)}`);
@@ -144,7 +160,7 @@ async function handleFailure(err) {
   // Keep the screen interesting while Plex is unavailable: rotate through cached posters.
   const current = engine?.current;
   const due = !current || Date.now() - (current.shownAt || 0) >= state.settings.rotateSeconds * 1000;
-  if (due && !fatal) {
+  if (due && !fatal && !state.asleep) {
     const cached = await cache.random(current?.ratingKey).catch(() => null);
     if (cached) {
       await display.show(cached.poster, cached.blob).catch(() => {});
@@ -153,8 +169,136 @@ async function handleFailure(err) {
     }
   }
   if (!display.currentPoster) showEmpty(true, err.message);
-  schedule(fatal ? 5 * 60 * 1000 : backoff.next());
+  // Asleep, the only thing to retry is the playback poll: keep it at its normal rate, not the 5 minute backoff.
+  const retryMs = fatal ? 5 * 60 * 1000 : backoff.next();
+  schedule(state.asleep ? Math.min(retryMs, state.settings.nowPlayingPollSeconds * 1000) : retryMs);
 }
+
+// ---------- Sleep ----------
+
+const MAX_POLL_FAILURES = 3;
+// Playback can change the sleep decision only if it wakes a schedule sleep or restarts the idle clock.
+const playbackMatters = (s) => (s.sleepEnabled && s.wakeOnPlayback) || s.idleSleepHours > 0;
+
+/**
+ * Asks Plex whether anything is playing, when sleep needs to know, and returns the sessions it saw
+ * (undefined when it did not ask or could not). May wake the display. A failed poll never refreshes
+ * `lastPlaybackAt` and keeps the last `playing` for at most MAX_POLL_FAILURES failures in a row (a blip
+ * must not black a movie out; an outage must not hold the display awake all night). Awake, the failure is
+ * only logged and rotation carries on (a shared or managed token is often refused /status/sessions);
+ * asleep, it goes to handleFailure, which retries at the poll rate.
+ */
+async function pollPlayback() {
+  if (!playbackMatters(state.settings)) {
+    state.playing = false;
+    state.pollFailures = 0;
+    return undefined;
+  }
+  let sessions;
+  try {
+    sessions = await client.sessions();
+  } catch (err) {
+    if (++state.pollFailures >= MAX_POLL_FAILURES) state.playing = false; // the 1 s evaluateSleep() timer acts on it
+    if (state.asleep) throw err;
+    if (!state.pollFailing) log.warn(`Playback check failed: ${err.message}`);
+    state.pollFailing = true;
+    return undefined;
+  }
+  state.pollFailing = false;
+  state.pollFailures = 0;
+  state.playing = Boolean(await engine.playing(sessions));
+  if (state.playing) {
+    syncSleepClock();
+    state.lastPlaybackAt = Date.now();
+  }
+  evaluateSleep();
+  return sessions;
+}
+
+/**
+ * A clock step (NTP arriving, a manual change) must not read as hours of idleness or a stuck manual wake:
+ * compare the wall clock with the monotonic one and shift the stored timestamps by the gap. Call it before
+ * every write of a wall-clock timestamp (so the step is absorbed first and the new stamp is not shifted
+ * again) and at the top of evaluateSleep().
+ */
+function syncSleepClock() {
+  const wall = Date.now();
+  const mono = performance.now();
+  const jump = wall - state.sleepClock.wall - (mono - state.sleepClock.mono);
+  state.sleepClock = { wall, mono };
+  if (Math.abs(jump) > 5000) {
+    state.lastPlaybackAt += jump;
+    if (state.manualWakeUntil) state.manualWakeUntil += jump;
+  }
+}
+
+/** Applies decideSleep() to the page: the veil and body.asleep. The wake lock is never touched. */
+function evaluateSleep() {
+  syncSleepClock();
+  const now = new Date();
+  const { asleep, why } = decideSleep({
+    now,
+    settings: state.settings,
+    lastPlaybackAt: state.lastPlaybackAt,
+    playingNow: state.playing,
+    manualWakeUntil: state.manualWakeUntil,
+    clockOk: isPlausibleClock(now),
+  });
+  state.sleepWhy = why;
+  if (asleep === state.asleep) return;
+  state.asleep = asleep;
+  $('sleep-veil').hidden = !asleep;
+  $('app').inert = asleep; // top-layer dialogs are outside #app and stay usable
+  document.body.classList.toggle('asleep', asleep);
+  if (asleep) $('controls').classList.remove('visible');
+  log.info(asleep ? `Asleep (${why})` : 'Awake');
+  if (!state.busy && !state.paused) tick(); // asleep: look for playback now; awake: show a poster now
+}
+setInterval(evaluateSleep, 1000);
+
+const SWALLOW_MS = 800;
+
+/** Settings and Diagnostics sit above the veil; input aimed at them is never swallowed. */
+const inOpenDialog = (e) => e.target instanceof Element && Boolean(e.target.closest('dialog[open]'));
+
+/**
+ * A touch, click or key press while asleep only wakes: it never reaches the control under the finger.
+ * Clicks stay swallowed until SWALLOW_MS after the last press that began asleep or inside that window, so a
+ * second blind tap does not land on the controls the first one uncovered. During a manual wake any press or
+ * key restarts the minute, in dialogs too.
+ */
+function manualWake(e) {
+  const swallowing = e.type === 'pointerdown' && performance.now() < state.swallowUntil;
+  if (!state.asleep && !swallowing && state.sleepWhy !== 'manual wake') return;
+  syncSleepClock();
+  state.manualWakeUntil = Date.now() + MANUAL_WAKE_MS;
+  if ((state.asleep || swallowing) && !inOpenDialog(e)) {
+    e.stopPropagation();
+    e.preventDefault();
+    if (e.type === 'pointerdown') state.swallowUntil = performance.now() + SWALLOW_MS;
+  }
+  evaluateSleep();
+}
+window.addEventListener('pointerdown', manualWake, true);
+window.addEventListener('keydown', manualWake, true);
+window.addEventListener(
+  'pointermove',
+  () => {
+    if (state.sleepWhy !== 'manual wake') return;
+    syncSleepClock();
+    state.manualWakeUntil = Date.now() + MANUAL_WAKE_MS;
+  },
+  { capture: true, passive: true },
+);
+window.addEventListener(
+  'click',
+  (e) => {
+    if (performance.now() >= state.swallowUntil || inOpenDialog(e)) return;
+    e.stopPropagation();
+    e.preventDefault();
+  },
+  true,
+);
 
 // ---------- UI state ----------
 
@@ -219,6 +363,9 @@ async function applySettings(next, { persist = true, preview = false } = {}) {
   document.body.classList.toggle('hide-cursor', state.settings.hideCursor);
   updateWakeLock();
   updatePinButton();
+  syncSleepClock();
+  state.lastPlaybackAt = Date.now(); // a save counts as a fresh start for the idle clock
+  evaluateSleep();
 
   const connectionChanged = ['plexToken', 'serverUrl', 'libraryKey', 'unwatchedOnly', 'randomPoolSize'].some(
     (k) => prev[k] !== state.settings[k],
@@ -286,6 +433,8 @@ function renderDiagnostics() {
     'Last error': state.lastError || 'none',
     'Cached posters': cache.available ? String(cache.entries().length) : 'unavailable',
     'Image mode': state.directImages ? 'direct (no offline cache)' : 'downloaded + cached',
+    Sleep: `${state.asleep ? 'asleep' : 'awake'}${state.sleepWhy ? ` (${state.sleepWhy})` : ''}`,
+    'Local time': `${new Date().toLocaleString()}${isPlausibleClock(new Date()) ? '' : ' — Clock not set'}`,
     'Wake lock': state.wakeLock ? 'held' : s.keepAwake ? 'not held' : 'off',
     Storage: storage.persistent ? 'localStorage' : 'memory only (settings will not persist!)',
     Screen: `${innerWidth}×${innerHeight} @${devicePixelRatio}x, rotation ${s.rotation}°`,
@@ -452,6 +601,7 @@ async function boot() {
     const provisioned = await loadProvisionedConfig();
     if (provisioned) state.settings = save(storage, provisioned);
   }
+  evaluateSleep(); // black before the first poster, not after
   if (!storage.persistent) log.warn('localStorage unavailable — settings will not survive a reload.');
 
   registerServiceWorker();

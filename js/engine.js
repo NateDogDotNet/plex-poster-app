@@ -51,15 +51,26 @@ export function createEngine({ client, getSettings, now = () => Date.now(), rand
     },
 
     /**
-     * Returns `{ poster, reason }` when the display should change, or null to keep the
-     * current poster. Throws PlexError on connection problems.
+     * The session that counts as playback (honours `username` and `includeEpisodes`, even when
+     * `showNowPlaying` is off), or null. Fetches no art and records nothing as shown; sleep mode
+     * uses it to watch for playback while the screen is black. Throws PlexError like `decide()`.
+     * Pass the `/status/sessions` result already in hand to avoid a second request.
      */
-    async decide({ force = false } = {}) {
+    async playing(sessions) {
+      return pickNowPlaying(sessions ?? (await client.sessions()), getSettings());
+    },
+
+    /**
+     * Returns `{ poster, reason }` when the display should change, or null to keep the
+     * current poster. Throws PlexError on connection problems. `sessions` is a `/status/sessions`
+     * result the caller already fetched this tick (one request per tick); omitted, it is fetched here.
+     */
+    async decide({ force = false, sessions } = {}) {
       const s = getSettings();
 
       // Now playing wins over everything; a pinned poster replaces random rotation.
       if (s.showNowPlaying) {
-        const np = pickNowPlaying(await client.sessions(), s);
+        const np = pickNowPlaying(sessions ?? (await client.sessions()), s);
         if (np) {
           if (!force && current?.source === 'now-playing' && current.ratingKey === np.ratingKey) return null;
           return { poster: np, reason: np.user ? `now playing for ${np.user}` : 'now playing' };

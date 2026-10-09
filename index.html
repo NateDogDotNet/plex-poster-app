@@ -190,6 +190,22 @@
             <button type="button" class="btn danger" id="reset-btn">Reset everything</button>
           </div>
         </fieldset>
+
+        <fieldset>
+          <legend>Sleep</legend>
+          <label class="check"><input name="sleepEnabled" type="checkbox" /> Go black on a schedule</label>
+          <label>From
+            <input name="sleepStart" type="time" />
+          </label>
+          <label>Until
+            <input name="sleepEnd" type="time" />
+          </label>
+          <label>Also go black after
+            <span class="input-row"><input name="idleSleepHours" type="number" min="0" max="48" step="1" /> <span class="muted">hours without playback (0 = off)</span></span>
+          </label>
+          <label class="check"><input name="wakeOnPlayback" type="checkbox" /> Wake the screen when something starts playing</label>
+          <p class="muted small">Asleep is a black screen that keeps the display awake, so playback can wake it. With idle sleep the screen stays black between movies. Touch or press a key to wake it for a minute. Turn off your system's own screen blanking.</p>
+        </fieldset>
       </div>
 
       <footer class="sheet-foot">
@@ -212,6 +228,8 @@
       <button type="button" class="btn primary" id="diag-close">Close</button>
     </footer>
   </dialog>
+
+  <div id="sleep-veil" class="sleep-veil" aria-hidden="true" hidden></div>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
