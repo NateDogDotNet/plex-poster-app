@@ -65,3 +65,7 @@ Decisions that bind the integration plan (`docs/integration-plan.md`) and spec (
   - K18: with `showNowPlaying` on, a 401/403 on /status/sessions leaves no poster via `engine.decide()`; goes to `metadata-and-now-playing`.
 - **D25 No wake fade for now (K15).** Waking stays a hard cut; judged on the real screen during hardware validation (`frame-brightness` / night dim are the natural home).
 - **D26 Option spelling (K17).** `serve.mjs` options keep the space form only (`--helper-power cec-ctl`); the `docs` phase shows that form.
+
+## Stop 6 — 2026-10-09, owner answer "a"
+
+- **D27 Sleep mode: two more tests.** One more owner-authorised `sleep-mode` round that only adds regression tests for the clock-step fix at the two write sites still untested — a playback poll that sees a movie, and a pointer move during a manual wake, each within the same second as a clock step. No app code change is expected; if a test exposes a bug, the round stops and reports it.
