@@ -69,3 +69,7 @@ Decisions that bind the integration plan (`docs/integration-plan.md`) and spec (
 ## Stop 6 — 2026-10-09, owner answer "a"
 
 - **D27 Sleep mode: two more tests.** One more owner-authorised `sleep-mode` round that only adds regression tests for the clock-step fix at the two write sites still untested — a playback poll that sees a movie, and a pointer move during a manual wake, each within the same second as a clock step. No app code change is expected; if a test exposes a bug, the round stops and reports it.
+
+## Stop 7 — 2026-10-09, owner answer "Defaults"
+
+- **D28 Sleep mode lands; leftovers routed.** `sleep-mode` lands as approved. Each leftover becomes a must-fix for the later phase that edits that code: C8M1 (no second /status/sessions request in a tick after a failed playback poll with now-playing on) → `metadata-and-now-playing`, with K18; C8M2 (rebuild the Plex client before the wake tick when Save is the waking press) → `settings-sheet`; C8M3 (an automatic reload must not restart the idle-sleep clock) → `pi-stability`; A8-d (the heal path's second download is not drawn if sleep started during it) → `content-rating-filter`, with K5.
