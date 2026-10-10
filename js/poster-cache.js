@@ -48,7 +48,7 @@ export function createPosterCache({ storage, limit = DEFAULT_LIMIT, caches = glo
       if (!available) return;
       const cache = await caches.open(CACHE_NAME);
       await cache.put(keyUrl(poster.ratingKey), new Response(blob, { headers: { 'Content-Type': blob.type || 'image/jpeg' } }));
-      const meta = { ratingKey: poster.ratingKey, title: poster.title, year: poster.year, thumb: poster.thumb, contentRating: poster.contentRating || '', width: size.width, height: size.height, savedAt: Date.now() };
+      const meta = { ratingKey: poster.ratingKey, title: poster.title, year: poster.year, thumb: poster.thumb, contentRating: poster.contentRating || '', ...(poster.duration ? { duration: poster.duration } : {}), width: size.width, height: size.height, savedAt: Date.now() };
       const list = [meta, ...readIndex().filter((e) => e.ratingKey !== poster.ratingKey)];
       const evicted = list.splice(maxEntries());
       writeIndex(list);

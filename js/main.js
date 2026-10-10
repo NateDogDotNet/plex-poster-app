@@ -42,6 +42,7 @@ const state = {
   manualWakeUntil: 0,
   swallowUntil: 0, // performance.now() until which clicks are swallowed (after a press that only woke the display)
   pollFailing: false,
+  pollError: null, // the error of this tick's failed playback poll, handed to decide() so it does not ask again
   pollFailures: 0, // consecutive failed playback polls
   sleepClock: { wall: Date.now(), mono: performance.now() },
 };
@@ -53,7 +54,15 @@ const backoff = createBackoff({ baseMs: 5000, maxMs: 5 * 60 * 1000 });
 function rebuildClient() {
   const s = state.settings;
   client = isConfigured(s) ? createPlexClient({ serverUrl: s.serverUrl, token: s.plexToken, clientId: clientIdValue }) : null;
-  engine = client ? createEngine({ client, getSettings: () => state.settings }) : null;
+  engine = client
+    ? createEngine({
+        client,
+        getSettings: () => state.settings,
+        // D37: while a limit is set, each online pool load re-confirms the cached titles' ratings.
+        cachedKeys: () => cache.entries().map((e) => e.ratingKey),
+        onRatings: (posters) => posters.forEach((p) => cache.refreshRating(p)),
+      })
+    : null;
   state.directImages = false;
 }
 
@@ -115,6 +124,18 @@ function blockPoster() {
   });
   display.currentPoster = null;
   display.setTitle(null);
+  display.setNowPlaying(null);
+}
+
+/**
+ * The progress bar and player label follow the session the engine saw this tick, but only while that very
+ * session's poster is on screen and allowed there (the engine already drops a title the limit hides).
+ */
+function updateNowPlaying() {
+  const session = engine?.session;
+  const shown = display.currentPoster;
+  const live = session && shown && shown.source === 'now-playing' && shown.ratingKey === session.ratingKey && allowedOnScreen(shown);
+  display.setNowPlaying(live ? session : null);
 }
 
 /**
@@ -178,8 +199,9 @@ async function tick({ force = false } = {}) {
   state.busy = true;
   try {
     const sessions = await pollPlayback(); // fetched once; decide() reuses it
+    const sessionsError = state.pollError; // a failed poll is not repeated by decide() (C8M1)
     // Asleep: Plex is polled above, but no poster is chosen, fetched or shown.
-    const decision = state.asleep ? null : await engine.decide({ force: force || document.body.classList.contains('poster-blocked'), sessions });
+    const decision = state.asleep ? null : await engine.decide({ force: force || document.body.classList.contains('poster-blocked'), sessions, sessionsError });
     let refused = false; // a poster was fetched but the limit no longer allows it
     if (decision) {
       cache.refreshRating(decision.poster); // seen online: its stored rating follows Plex (C7M2)
@@ -209,6 +231,7 @@ async function tick({ force = false } = {}) {
         log.info(`Showing "${decision.poster.title}" (${decision.reason})`);
       }
     }
+    if (!state.asleep) updateNowPlaying();
     state.lastSuccessAt = Date.now();
     if (state.offlineSince) log.info(`Back online after ${formatDuration(Date.now() - state.offlineSince)}`);
     state.offlineSince = 0;
@@ -230,6 +253,7 @@ async function tick({ force = false } = {}) {
 }
 
 async function handleFailure(err) {
+  display.setNowPlaying(null); // what Plex last said about playback is no longer known
   state.lastError = err.message;
   if (!state.offlineSince) state.offlineSince = Date.now();
   const fatal = err.kind === 'auth' || err.kind === 'empty';
@@ -280,6 +304,7 @@ const playbackMatters = (s) => (s.sleepEnabled && s.wakeOnPlayback) || s.idleSle
  * asleep, it goes to handleFailure, which retries at the poll rate.
  */
 async function pollPlayback() {
+  state.pollError = null;
   if (!playbackMatters(state.settings)) {
     state.playing = false;
     state.pollFailures = 0;
@@ -289,6 +314,7 @@ async function pollPlayback() {
   try {
     sessions = await client.sessions();
   } catch (err) {
+    state.pollError = err;
     if (++state.pollFailures >= MAX_POLL_FAILURES) state.playing = false; // the 1 s evaluateSleep() timer acts on it
     if (state.asleep) throw err;
     if (!state.pollFailing) log.warn(`Playback check failed: ${err.message}`);

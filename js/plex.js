@@ -101,7 +101,29 @@ export function pickNowPlaying(sessions, { username = '', includeEpisodes = true
   if (!candidates.length) return null;
   const rank = (m) => (m.Player?.state === 'playing' ? 0 : m.Player?.state === 'buffering' ? 1 : 2);
   candidates.sort((a, b) => rank(a) - rank(b));
-  return toPoster(candidates[0], 'now-playing');
+  const m = candidates[0];
+  return {
+    ...toPoster(m, 'now-playing'),
+    viewOffset: toMs(m.viewOffset),
+    playerTitle: m.Player?.title || '',
+    playerState: m.Player?.state || '',
+    paused: m.Player?.state === 'paused',
+  };
+}
+
+/** A non-negative number of milliseconds from a JSON number or an XML attribute string; anything else is 0. */
+function toMs(v) {
+  const n = typeof v === 'number' || (typeof v === 'string' && v.trim() !== '') ? Number(v) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** "2 h 14 m", "48 m", "2 h"; empty when the runtime is missing or under half a minute. */
+export function formatRuntime(ms) {
+  const minutes = Math.round(toMs(ms) / 60000);
+  if (!minutes) return '';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return [h && `${h} h`, m && `${m} m`].filter(Boolean).join(' ');
 }
 
 /** Normalised poster descriptor used throughout the app. */
@@ -111,13 +133,16 @@ export function toPoster(m, source) {
   return {
     ratingKey: String(isEpisode ? m.grandparentRatingKey || m.ratingKey : m.ratingKey),
     title: isEpisode ? m.grandparentTitle || m.title : m.title,
-    year: isEpisode ? '' : m.year ? String(m.year) : '',
+    year: yearOf(isEpisode ? m.grandparentYear : m.year), // an episode shows its series' year, when Plex sends one
     thumb,
     source, // 'now-playing' | 'random' | 'static' | 'cache'
     user: m.User?.title || '',
     contentRating: typeof m.contentRating === 'string' ? m.contentRating : '', // '' = unrated or missing
+    duration: toMs(m.duration), // ms; the playing item's own length for an episode; 0 = unknown
   };
 }
+
+const yearOf = (y) => (y ? String(y) : '');
 
 export function createPlexClient({ serverUrl, token, clientId, fetchImpl = (...a) => fetch(...a) }) {
   const auth = { 'X-Plex-Token': token, 'X-Plex-Client-Identifier': clientId, 'X-Plex-Product': PRODUCT };
@@ -161,6 +186,16 @@ export function createPlexClient({ serverUrl, token, clientId, fetchImpl = (...a
       const m = (c.Metadata || [])[0];
       if (!m) throw new PlexError('That library item no longer exists.', { kind: 'http', status: 404 });
       return toPoster(m, 'static');
+    },
+
+    /**
+     * Several library items in ONE request (`/library/metadata/k1,k2,...`, commas literal), as posters.
+     * Keys Plex does not return are simply absent from the result. No keys: no request.
+     */
+    async items(ratingKeys) {
+      if (!ratingKeys.length) return [];
+      const c = await get(`/library/metadata/${ratingKeys.map(encodeURIComponent).join(',')}`);
+      return (c.Metadata || []).map((m) => toPoster(m, 'static'));
     },
 
     /** A resized poster via the Plex photo transcoder — far lighter than the original artwork. */

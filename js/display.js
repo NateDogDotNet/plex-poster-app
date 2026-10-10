@@ -1,6 +1,7 @@
 // Renders the frame and poster: sizing, rotation and cross-fades.
 
 import { detectWindow, findFrame, NO_FRAME, CUSTOM_FRAME_ID } from './frames.js';
+import { formatRuntime } from './plex.js';
 import { posterBox, stageSize } from './layout.js';
 
 const POSTER_ASPECT = 2 / 3;
@@ -23,8 +24,11 @@ export function createDisplay(root = document) {
     layers: [root.getElementById('poster-a'), root.getElementById('poster-b')],
     frame: root.getElementById('frame'),
     title: root.getElementById('title-card'),
+    progress: root.getElementById('progress'),
+    playerLabel: root.getElementById('player-label'),
   };
   let settings = null;
+  let nowPlaying = null; // { session, at }: what setNowPlaying last drew, so a settings change can redraw it
   let frame = { src: '', window: NO_FRAME.window, aspect: POSTER_ASPECT };
   let front = 0;
   const objectUrls = new WeakMap();
@@ -113,9 +117,34 @@ export function createDisplay(root = document) {
     return box;
   }
 
+  function drawNowPlaying(session, elapsed) {
+    const bar = el.progress;
+    const showBar = Boolean(settings?.showProgress && session && session.duration > 0);
+    bar.hidden = !showBar;
+    bar.style.transition = 'none';
+    if (showBar) {
+      const playing = session.playerState === 'playing'; // paused and buffering sit still
+      const offset = Math.min(session.duration, session.viewOffset + (playing ? elapsed : 0));
+      bar.style.transform = `scaleX(${offset / session.duration})`;
+      if (playing && offset < session.duration) {
+        void bar.offsetWidth; // commit the start position, so the transition begins from it
+        bar.style.transition = `transform ${session.duration - offset}ms linear`;
+        bar.style.transform = 'scaleX(1)';
+      }
+    } else {
+      bar.style.transform = 'scaleX(0)';
+    }
+    const label = settings?.showPlayer && session?.playerTitle ? `Playing in ${session.playerTitle}` : '';
+    el.playerLabel.hidden = !label;
+    el.playerLabel.textContent = label;
+  }
+
   return {
     async apply(s) {
+      const barOrLabelChanged = settings && (settings.showProgress !== s.showProgress || settings.showPlayer !== s.showPlayer);
       settings = s;
+      // The bar and the label follow their settings at once, a live preview included; the poster on screen is unchanged.
+      if (barOrLabelChanged) this.redrawNowPlaying();
       await loadFrame(s).catch((err) => {
         frame = { src: '', window: NO_FRAME.window, aspect: POSTER_ASPECT };
         el.frame.hidden = true;
@@ -173,10 +202,38 @@ export function createDisplay(root = document) {
       }
     },
 
+    /** The overlay slot: the 2.0.0 title line when `showTitle`, and "rating · runtime · year" when `showMeta`. */
     setTitle(poster) {
-      const show = Boolean(settings?.showTitle && poster?.title);
-      el.title.hidden = !show;
-      el.title.textContent = show ? [poster.title, poster.year && `(${poster.year})`].filter(Boolean).join(' ') : '';
+      const lines = [];
+      if (settings?.showTitle && poster?.title) lines.push([poster.title, poster.year && `(${poster.year})`].filter(Boolean).join(' '));
+      if (settings?.showMeta && poster) {
+        const meta = [poster.contentRating, formatRuntime(poster.duration), poster.year].filter(Boolean).join(' · ');
+        if (meta) lines.push(meta);
+      }
+      el.title.hidden = !lines.length;
+      el.title.replaceChildren(
+        ...lines.map((text) => {
+          const line = document.createElement('div');
+          line.textContent = text;
+          return line;
+        }),
+      );
+    },
+
+    /**
+     * The playback progress bar and the optional player label for the session on screen (null: neither).
+     * The bar is set to where the session is (`viewOffset` of `duration`) and then given ONE linear transition to
+     * the end lasting the remaining time, so it advances between polls with no timer; only a `playing` session moves (paused and buffering sit still).
+     * The next poll sets it again, which is where a jump shows (Plex reports `viewOffset` every ~10 s).
+     */
+    setNowPlaying(session) {
+      nowPlaying = session ? { session, at: Date.now() } : null;
+      drawNowPlaying(session, 0);
+    },
+
+    /** Draws the last session again under the current settings, moved on by the time since it was drawn while it plays. */
+    redrawNowPlaying() {
+      if (nowPlaying) drawNowPlaying(nowPlaying.session, Date.now() - nowPlaying.at);
     },
   };
 }

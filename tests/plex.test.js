@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildUrl, createPlexClient, discoverServers, pickNowPlaying, rankConnections, toPoster } from '../js/plex.js';
+import { buildUrl, createPlexClient, discoverServers, formatRuntime, pickNowPlaying, rankConnections, toPoster, xmlToContainer } from '../js/plex.js';
 import { allowedValues } from '../js/ratings.js';
 
 const jsonResponse = (body, status = 200) =>
@@ -39,7 +39,7 @@ test('client sends token in the query and only an Accept header (no CORS preflig
   };
   const client = createPlexClient({ serverUrl: 'http://h:32400/', token: 'tok', clientId: 'cid', fetchImpl });
   const pool = await client.pool({ libraryKey: '1', unwatchedOnly: true, size: 50 });
-  assert.deepEqual(pool, [{ ratingKey: '7', title: 'A', year: '1999', thumb: '/thumb/7', source: 'random', user: '', contentRating: '' }]);
+  assert.deepEqual(pool, [{ ratingKey: '7', title: 'A', year: '1999', thumb: '/thumb/7', source: 'random', user: '', contentRating: '', duration: 0 }]);
   assert.equal(calls[0].url.searchParams.get('contentRating'), null, 'no limit: no rating filter is sent');
   const { url, opts } = calls[0];
   assert.equal(url.pathname, '/library/sections/1/all');
@@ -158,4 +158,119 @@ test('pool() returns the rating of each item and does not filter by it (the engi
   ]);
   const pool = await client.pool({ libraryKey: '1', size: 10, maxContentRating: 'PG' });
   assert.deepEqual(pool.map((p) => p.contentRating), ['G', 'R', '']);
+});
+
+// ---- metadata overlay and playback progress (R-NP-1, R-NP-2) ----
+
+test('toPoster carries contentRating, duration and year for a movie', () => {
+  const p = toPoster({ type: 'movie', ratingKey: '3', title: 'Velvet Curtain', year: 1972, thumb: '/t/3', contentRating: 'PG-13', duration: 8040000 }, 'random');
+  assert.equal(p.contentRating, 'PG-13');
+  assert.equal(p.duration, 8040000);
+  assert.equal(p.year, '1972');
+});
+
+test('toPoster: an episode carries the series values (Q-mnp2)', () => {
+  const ep = { type: 'episode', ratingKey: '2', grandparentRatingKey: '9', grandparentTitle: 'Show', grandparentYear: 2008, year: 2011, title: 'E', thumb: '/t', contentRating: 'TV-14', duration: 2880000 };
+  const p = toPoster(ep, 'now-playing');
+  assert.equal(p.ratingKey, '9');
+  assert.equal(p.title, 'Show');
+  assert.equal(p.contentRating, 'TV-14');
+  assert.equal(p.year, '2008', "the series' year, not the episode's");
+  assert.equal(p.duration, 2880000, "the playing item's own length");
+  assert.equal(toPoster({ ...ep, grandparentYear: undefined }, 'now-playing').year, '', 'no series year sent: blank');
+});
+
+test('toPoster: missing or junk duration is 0, a numeric string is a number', () => {
+  const base = { type: 'movie', ratingKey: '1', title: 'A', thumb: '/t' };
+  assert.equal(toPoster(base, 'random').duration, 0);
+  assert.equal(toPoster({ ...base, duration: 'abc' }, 'random').duration, 0);
+  assert.equal(toPoster({ ...base, duration: -5 }, 'random').duration, 0);
+  assert.equal(toPoster({ ...base, duration: '2880000' }, 'random').duration, 2880000);
+});
+
+test('formatRuntime: hours and minutes, minutes alone, and empty when unknown', () => {
+  assert.equal(formatRuntime(8040000), '2 h 14 m');
+  assert.equal(formatRuntime(2880000), '48 m');
+  assert.equal(formatRuntime(7200000), '2 h');
+  assert.equal(formatRuntime(3600000), '1 h');
+  assert.equal(formatRuntime(0), '');
+  assert.equal(formatRuntime(undefined), '');
+  assert.equal(formatRuntime(null), '');
+  assert.equal(formatRuntime(''), '');
+  assert.equal(formatRuntime('abc'), '');
+  assert.equal(formatRuntime(-1000), '');
+  assert.equal(formatRuntime(20000), '', 'under half a minute rounds to nothing');
+  assert.equal(formatRuntime('2880000'), '48 m');
+});
+
+const SESSION = {
+  type: 'movie', ratingKey: '3', title: 'Velvet Curtain', year: 1972, thumb: '/t/3', contentRating: 'PG-13',
+  duration: 6000000, viewOffset: 600000, User: { title: 'demo' }, Player: { title: 'Living Room', state: 'playing' },
+};
+
+test('pickNowPlaying carries viewOffset, duration, playerTitle and paused state from a JSON session', () => {
+  const p = pickNowPlaying([SESSION]);
+  assert.equal(p.viewOffset, 600000);
+  assert.equal(p.duration, 6000000);
+  assert.equal(p.playerTitle, 'Living Room');
+  assert.equal(p.playerState, 'playing');
+  assert.equal(p.paused, false);
+  const paused = pickNowPlaying([{ ...SESSION, Player: { title: 'Living Room', state: 'paused' } }]);
+  assert.equal(paused.paused, true);
+  assert.equal(paused.playerState, 'paused');
+});
+
+test('pickNowPlaying: missing session fields are 0 / empty, never NaN', () => {
+  const p = pickNowPlaying([{ type: 'movie', ratingKey: '1', title: 'A', thumb: '/t' }]);
+  assert.equal(p.viewOffset, 0);
+  assert.equal(p.duration, 0);
+  assert.equal(p.playerTitle, '');
+  assert.equal(p.paused, false);
+});
+
+// A just-enough stand-in for the DOM tree DOMParser builds from /status/sessions XML (node has no DOMParser).
+function fakeXml(root) {
+  const node = ([name, attrs, kids = []]) => {
+    const children = kids.map(node);
+    return {
+      nodeName: name,
+      attributes: Object.entries(attrs).map(([n, value]) => ({ name: n, value })),
+      children,
+    };
+  };
+  return { documentElement: node(root), getElementsByTagName: () => [] };
+}
+
+test('pickNowPlaying carries the same fields from an XML session (attributes are strings)', () => {
+  const doc = fakeXml(['MediaContainer', { size: '1' }, [
+    ['Video', { type: 'movie', ratingKey: '3', title: 'Velvet Curtain', year: '1972', thumb: '/t/3', contentRating: 'PG-13', duration: '6000000', viewOffset: '600000' }, [
+      ['User', { title: 'demo' }],
+      ['Player', { title: 'Living Room', state: 'paused' }],
+    ]],
+  ]]);
+  const p = pickNowPlaying(xmlToContainer(doc).Metadata);
+  assert.equal(p.viewOffset, 600000);
+  assert.equal(p.duration, 6000000);
+  assert.equal(p.playerTitle, 'Living Room');
+  assert.equal(p.paused, true);
+  assert.equal(p.year, '1972');
+  assert.equal(p.contentRating, 'PG-13');
+});
+
+test('items(keys) is ONE request with the keys joined by literal commas, and returns each item with its rating', async () => {
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(new URL(url));
+    return jsonResponse({ MediaContainer: { Metadata: [
+      { ratingKey: '1', title: 'A', thumb: '/t/1', contentRating: 'G' },
+      { ratingKey: '4', title: 'D', thumb: '/t/4', contentRating: 'R' },
+    ] } });
+  };
+  const client = createPlexClient({ serverUrl: 'http://h:32400', token: 't', clientId: 'c', fetchImpl });
+  const items = await client.items(['1', '2', '4']);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].pathname, '/library/metadata/1,2,4');
+  assert.deepEqual(items.map((p) => [p.ratingKey, p.contentRating]), [['1', 'G'], ['4', 'R']]);
+  assert.deepEqual(await client.items([]), [], 'no keys: no request');
+  assert.equal(calls.length, 1);
 });

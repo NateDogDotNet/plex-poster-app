@@ -319,3 +319,207 @@ test('a pinned poster still stands in for an above-limit now-playing title', asy
   assert.equal(d.poster.ratingKey, '42');
   assert.equal(d.poster.source, 'static');
 });
+
+// ---- latest session snapshot (R-NP-1) ----
+
+const SNAP = (viewOffset, state = 'playing', extra = {}) => [{
+  type: 'movie', ratingKey: 'np', title: 'Playing', thumb: '/t/np', contentRating: 'PG', duration: 6000000, viewOffset,
+  User: { title: 'me' }, Player: { title: 'Den', state }, ...extra,
+}];
+
+test('the engine exposes the latest session snapshot even when decide() returns null for an unchanged poster', async () => {
+  const { engine } = setup({}, { pool: [poster('a')] });
+  assert.equal(engine.session, null, 'nothing polled yet');
+  const d = await engine.decide({ sessions: SNAP(600000) });
+  assert.equal(engine.session.viewOffset, 600000);
+  engine.shown(d.poster);
+  assert.equal(await engine.decide({ sessions: SNAP(1200000) }), null, 'same poster: nothing to redraw');
+  assert.equal(engine.session.viewOffset, 1200000, 'but the snapshot moved on');
+  assert.equal(engine.session.playerTitle, 'Den');
+  assert.equal(engine.session.duration, 6000000);
+  await engine.decide({ sessions: SNAP(1200000, 'paused') });
+  assert.equal(engine.session.paused, true);
+});
+
+test('the snapshot is null when nothing is playing, when showNowPlaying is off, and when the filter hides the title', async () => {
+  const { engine } = setup({}, { pool: [poster('a')] });
+  await engine.decide({ sessions: SNAP(1) });
+  assert.ok(engine.session);
+  await engine.decide({ sessions: [] });
+  assert.equal(engine.session, null);
+
+  const off = setup({ showNowPlaying: false }, { pool: [poster('a')] });
+  await off.engine.decide({ sessions: SNAP(1) });
+  assert.equal(off.engine.session, null);
+
+  const limited = setup({ maxContentRating: 'G' }, { pool: [rated('g', 'G')] });
+  await limited.engine.decide({ sessions: SNAP(1) }); // PG title under a G limit
+  assert.equal(limited.engine.session, null, 'a blocked title leaves no snapshot to draw');
+});
+
+// ---- K18 (D24) and C8M1 (D28): a refused or failed sessions call ----
+
+const refused = (status) => Object.assign(new Error(`Plex rejected the token (${status}).`), { kind: 'auth', status });
+
+test('K18: a 401/403 on the engine\'s own /status/sessions fetch means nothing is playing and rotation carries on', async () => {
+  for (const status of [401, 403]) {
+    const client = { ...fakeClient({ pool: [poster('a')] }), sessions: async () => { throw refused(status); } };
+    const engine = createEngine({ client, getSettings: () => ({ ...defaults(), plexToken: 't', serverUrl: 'http://s', libraryKey: '1' }) });
+    const d = await engine.decide();
+    assert.equal(d.poster.source, 'random', String(status));
+    assert.equal(engine.session, null);
+  }
+});
+
+test('K18: other errors from the sessions fetch still propagate', async () => {
+  const client = { ...fakeClient({ pool: [poster('a')] }), sessions: async () => { throw Object.assign(new Error('down'), { kind: 'network' }); } };
+  const engine = createEngine({ client, getSettings: () => ({ ...defaults(), plexToken: 't', serverUrl: 'http://s', libraryKey: '1' }) });
+  await assert.rejects(engine.decide(), { kind: 'network' });
+});
+
+test('C8M1: decide({ sessionsError }) does not fetch /status/sessions again; a refused poll is nothing playing', async () => {
+  const { engine, client } = setup({}, { sessions: NP, pool: [poster('a')] });
+  const d = await engine.decide({ sessionsError: refused(403) });
+  assert.equal(d.poster.source, 'random');
+  assert.equal(client.calls.sessions, 0);
+});
+
+test('C8M1: decide({ sessionsError }) rethrows any other failed poll, still without a second request', async () => {
+  const { engine, client } = setup({}, { sessions: NP, pool: [poster('a')] });
+  await assert.rejects(engine.decide({ sessionsError: Object.assign(new Error('down'), { kind: 'network' }) }), { kind: 'network' });
+  assert.equal(client.calls.sessions, 0);
+});
+
+test('C8M1: with showNowPlaying off a poll error is ignored (nothing asks for sessions)', async () => {
+  const { engine, client } = setup({ showNowPlaying: false }, { sessions: NP, pool: [poster('a')] });
+  const d = await engine.decide({ sessionsError: Object.assign(new Error('down'), { kind: 'network' }) });
+  assert.equal(d.poster.source, 'random');
+  assert.equal(client.calls.sessions, 0);
+});
+
+// ---- D37: re-rate the cached titles on each online pool load while a limit is set ----
+
+function ratedSetup(overrides, { returned = [], cached = ['1', '2', '3'], pool = [rated('g', 'G')], fail = false, answer = null } = {}) {
+  const base = setup(overrides, { pool });
+  const asked = [];
+  base.client.items = async (keys) => {
+    asked.push(keys);
+    if (answer) return answer(keys, asked.length - 1); // may throw for one batch
+    if (fail) throw Object.assign(new Error('boom'), { kind: 'http' });
+    return returned;
+  };
+  const applied = [];
+  let t = 1_000_000;
+  const engine = createEngine({
+    client: base.client,
+    getSettings: () => base.settings,
+    now: () => t,
+    random: () => 0,
+    cachedKeys: () => cached,
+    onRatings: (list) => applied.push(list),
+  });
+  return { engine, asked, applied, advance: (ms) => (t += ms), settings: base.settings };
+}
+
+test('D37: with a limit, a pool load asks ONE batched request for the cached keys and applies every returned rating', async () => {
+  const { engine, asked, applied } = ratedSetup(
+    { maxContentRating: 'PG-13' },
+    { returned: [{ ratingKey: '1', contentRating: 'G' }, { ratingKey: '2', contentRating: 'R' }, { ratingKey: '3', contentRating: 'PG' }] },
+  );
+  await engine.decide();
+  assert.deepEqual(asked, [['1', '2', '3']]);
+  assert.deepEqual(applied[0].map((p) => [p.ratingKey, p.contentRating]), [['1', 'G'], ['2', 'R'], ['3', 'PG']]);
+});
+
+test('D37: a cached key the response does not return is stored as unrated (fails closed)', async () => {
+  const { engine, applied } = ratedSetup({ maxContentRating: 'PG-13' }, { returned: [{ ratingKey: '1', contentRating: 'G' }] });
+  await engine.decide();
+  assert.deepEqual(applied[0].map((p) => [p.ratingKey, p.contentRating]), [['1', 'G'], ['2', ''], ['3', '']]);
+});
+
+test('D37: a title that is merely absent from the random pool is not treated as re-rated', async () => {
+  const { engine, applied } = ratedSetup({ maxContentRating: 'PG-13' }, { returned: [{ ratingKey: '1', contentRating: 'PG' }], pool: [rated('g', 'G')], cached: ['1'] });
+  await engine.decide();
+  assert.deepEqual(applied[0].map((p) => [p.ratingKey, p.contentRating]), [['1', 'PG']], 'only what the metadata response said');
+});
+
+const keysOf = (n) => Array.from({ length: n }, (_, i) => String(i + 1));
+const pairs = (list) => list.map((p) => [p.ratingKey, p.contentRating]);
+
+test('D37 (MCI1): 250 cached keys are asked about in batches of 100 and every one is reported', async () => {
+  const cached = keysOf(250);
+  const { engine, asked, applied } = ratedSetup({ maxContentRating: 'PG-13' }, { cached, answer: (keys) => keys.map((k) => ({ ratingKey: k, contentRating: Number(k) === 250 ? 'R' : 'PG' })) });
+  await engine.decide();
+  assert.deepEqual(asked.map((b) => b.length), [100, 100, 50]);
+  assert.deepEqual(asked.flat(), cached, 'each key asked exactly once, in cache order');
+  assert.equal(applied.length, 1);
+  assert.deepEqual(applied[0].map((p) => p.ratingKey), cached, 'all 250 reported');
+  assert.equal(applied[0][249].contentRating, 'R', 'a key past the 100th is re-rated too');
+  assert.equal(applied[0][0].contentRating, 'PG');
+});
+
+test('D37 (MCI1): a key whose batch fails is stored as unrated; the other batches still apply', async () => {
+  const cached = keysOf(250);
+  const { engine, applied } = ratedSetup(
+    { maxContentRating: 'PG-13' },
+    {
+      cached,
+      answer: (keys, n) => {
+        if (n === 1) throw Object.assign(new Error('boom'), { kind: 'http' });
+        return keys.map((k) => ({ ratingKey: k, contentRating: 'PG' }));
+      },
+    },
+  );
+  const d = await engine.decide();
+  assert.equal(d.poster.ratingKey, 'g', 'the pool load still succeeds');
+  const byKey = new Map(pairs(applied[0]));
+  assert.equal(byKey.size, 250);
+  for (const k of cached) assert.equal(byKey.get(k), Number(k) >= 101 && Number(k) <= 200 ? '' : 'PG', `key ${k}`);
+});
+
+test('D37 (MCI1): a key a batch leaves out is unrated, in any batch', async () => {
+  const cached = keysOf(150);
+  const { engine, applied } = ratedSetup({ maxContentRating: 'PG-13' }, { cached, answer: (keys) => keys.filter((k) => k !== '120').map((k) => ({ ratingKey: k, contentRating: 'G' })) });
+  await engine.decide();
+  const byKey = new Map(pairs(applied[0]));
+  assert.equal(byKey.get('120'), '');
+  assert.equal(byKey.get('119'), 'G');
+  assert.equal(byKey.size, 150);
+});
+
+test('D37 (MCI1): keys beyond what three requests cover are never asked about and are stored as unrated', async () => {
+  const cached = keysOf(350);
+  const { engine, asked, applied } = ratedSetup({ maxContentRating: 'PG-13' }, { cached, answer: (keys) => keys.map((k) => ({ ratingKey: k, contentRating: 'G' })) });
+  await engine.decide();
+  assert.equal(asked.length, 3, 'at most 3 requests per pool load');
+  const byKey = new Map(pairs(applied[0]));
+  assert.equal(byKey.size, 350);
+  assert.equal(byKey.get('300'), 'G');
+  assert.equal(byKey.get('301'), '');
+  assert.equal(byKey.get('350'), '');
+});
+
+test('D37: no limit, no cached keys, or a cached pool: no request', async () => {
+  const none = ratedSetup({ maxContentRating: '' });
+  await none.engine.decide();
+  assert.equal(none.asked.length, 0);
+
+  const empty = ratedSetup({ maxContentRating: 'PG' }, { cached: [] });
+  await empty.engine.decide();
+  assert.equal(empty.asked.length, 0);
+
+  const again = ratedSetup({ maxContentRating: 'PG' });
+  await again.engine.decide({ force: true });
+  await again.engine.decide({ force: true });
+  assert.equal(again.asked.length, 1, 'the second decide reuses the pool: no new load, no new re-check');
+  again.advance(31 * 60 * 1000);
+  await again.engine.decide({ force: true });
+  assert.equal(again.asked.length, 2, 'each online pool load re-checks');
+});
+
+test('D37: a failed batched request stores unrated for every key it asked about, and the pool load still succeeds (Q-mnp1)', async () => {
+  const { engine, applied } = ratedSetup({ maxContentRating: 'PG-13' }, { fail: true });
+  const d = await engine.decide();
+  assert.equal(d.poster.ratingKey, 'g');
+  assert.deepEqual(applied[0].map((p) => [p.ratingKey, p.contentRating]), [['1', ''], ['2', ''], ['3', '']]);
+});

@@ -36,6 +36,8 @@
         <img id="poster-a" class="poster-layer" alt="" decoding="async" />
         <img id="poster-b" class="poster-layer" alt="" decoding="async" />
         <div id="title-card" class="title-card" hidden></div>
+        <div id="player-label" class="player-label" hidden></div>
+        <div id="progress" class="progress" aria-hidden="true" hidden></div>
       </div>
       <img id="frame" class="frame" alt="" />
     </div>
@@ -193,6 +195,9 @@
             </select>
           </label>
           <label class="check"><input name="showTitle" type="checkbox" /> Show title below poster</label>
+          <label class="check"><input name="showMeta" type="checkbox" /> Show rating, runtime and year below poster</label>
+          <label class="check"><input name="showProgress" type="checkbox" /> Show a progress bar while something plays</label>
+          <label class="check"><input name="showPlayer" type="checkbox" /> Show which player is playing</label>
         </fieldset>
 
         <fieldset>

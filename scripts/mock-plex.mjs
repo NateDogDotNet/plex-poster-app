@@ -2,14 +2,20 @@
 // endpoints the app uses and returns generated SVG "posters".
 //
 // Control endpoints (no token needed):
-//   POST /__mock/play?ratingKey=3&user=demo   start a fake session
+//   POST /__mock/play?ratingKey=3&user=demo&offset=600000&duration=6000000&player=Living%20Room&state=paused
+//                                             start a fake session (offset/duration in ms, default 0 and the title's
+//                                             runtime; player is Player.title, default "Mock Player"; state default playing)
 //   POST /__mock/stop                         end it
+//   POST /__mock/rate?ratingKey=4&contentRating=R   re-rate a title from now on ("none" = unrated)
+//   POST /__mock/sessions-status?status=403   answer /status/sessions with that HTTP status (200 = normal again)
 //   GET  /__mock/stats                        {transcode, other}: image requests vs other Plex requests
-//   POST /__mock/reset-stats                  zero those counters
+//   GET  /__mock/log                          {requests}: every Plex request since the last reset, "path?query" without the token
+//   POST /__mock/reset-stats                  zero the counters and clear that log
 //   POST /__mock/down  /  POST /__mock/up      simulate the server going offline
 //
 // The 8 titles carry contentRating G, PG, PG-13, R, TV-MA, gb/12, gb/15 and none (title 8, as an unrated
-// Plex item has no attribute). /library/sections/1/all honours `contentRating=a,b,c` strictly: a title whose
+// Plex item has no attribute), and a runtime (`duration`, ms): item 3 is PG-13, 8,040,000 ms, 1972; the unrated item 8 has no
+// runtime either. /library/sections/1/all honours `contentRating=a,b,c` strictly: a title whose
 // rating is not in the list, or that has none, is dropped before paging. Other unknown parameters are ignored.
 
 import { createServer } from 'node:http';
@@ -17,15 +23,15 @@ import { createServer } from 'node:http';
 export const TOKEN = 'demo-token';
 
 const MOVIES = [
-  ['The Grand Marquee', 1954, '#8b1e3f', 'G'],
-  ['Midnight Projector', 1961, '#1e4f8b', 'PG'],
-  ['Velvet Curtain', 1972, '#5b2a86', 'PG-13'],
-  ['Popcorn Skies', 1985, '#b5651d', 'R'],
-  ['Neon Matinee', 1993, '#127a6b', 'TV-MA'],
-  ['Last Reel', 2004, '#6b6b12', 'gb/12'],
-  ['Silver Screen Serenade', 2016, '#3a3a3a', 'gb/15'],
-  ['Encore', 2023, '#a12828', undefined], // unrated: no contentRating attribute
-].map(([title, year, color, contentRating], i) => ({
+  ['The Grand Marquee', 1954, '#8b1e3f', 'G', 5_400_000],
+  ['Midnight Projector', 1961, '#1e4f8b', 'PG', 6_300_000],
+  ['Velvet Curtain', 1972, '#5b2a86', 'PG-13', 8_040_000],
+  ['Popcorn Skies', 1985, '#b5651d', 'R', 6_900_000],
+  ['Neon Matinee', 1993, '#127a6b', 'TV-MA', 7_200_000],
+  ['Last Reel', 2004, '#6b6b12', 'gb/12', 5_880_000],
+  ['Silver Screen Serenade', 2016, '#3a3a3a', 'gb/15', 9_000_000],
+  ['Encore', 2023, '#a12828', undefined, undefined], // unrated, no runtime: no contentRating or duration attribute
+].map(([title, year, color, contentRating, duration], i) => ({
   ratingKey: String(i + 1),
   key: `/library/metadata/${i + 1}`,
   type: 'movie',
@@ -33,6 +39,7 @@ const MOVIES = [
   year,
   color,
   ...(contentRating ? { contentRating } : {}),
+  ...(duration ? { duration } : {}),
   rating: 9 - i * 0.4,
   thumb: `/library/metadata/${i + 1}/thumb/1700000000`,
 }));
@@ -40,6 +47,16 @@ const MOVIES = [
 export async function startMockPlex({ port = 32401, host = '127.0.0.1' } = {}) {
   const state = { session: null, down: false };
   const stats = { transcode: 0, other: 0 };
+  const log = []; // "path?query" of every Plex request, token left out
+  const ratings = new Map(); // ratingKey -> contentRating set by /__mock/rate ('' = unrated)
+  let sessionsStatus = 200;
+  // A title as Plex would send it now: a re-rating applies to every endpoint.
+  const current = (m) => {
+    if (!m || !ratings.has(m.ratingKey)) return m;
+    const rest = { ...m };
+    delete rest.contentRating;
+    return ratings.get(m.ratingKey) ? { ...rest, contentRating: ratings.get(m.ratingKey) } : rest;
+  };
 
   const server = createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -52,16 +69,31 @@ export async function startMockPlex({ port = 32401, host = '127.0.0.1' } = {}) {
     if (url.pathname.startsWith('/__mock/')) {
       const action = url.pathname.slice(8);
       if (action === 'play') {
-        const movie = MOVIES.find((m) => m.ratingKey === (url.searchParams.get('ratingKey') || '1'));
-        state.session = { ...movie, User: { title: url.searchParams.get('user') || 'demo' }, Player: { state: 'playing' } };
+        const movie = current(MOVIES.find((m) => m.ratingKey === (url.searchParams.get('ratingKey') || '1')));
+        const num = (name, fallback) => (url.searchParams.has(name) ? Number(url.searchParams.get(name)) : fallback);
+        const duration = num('duration', movie?.duration);
+        state.session = {
+          ...movie,
+          ...(duration ? { duration } : {}),
+          viewOffset: num('offset', 0),
+          User: { title: url.searchParams.get('user') || 'demo' },
+          Player: { title: url.searchParams.get('player') || 'Mock Player', state: url.searchParams.get('state') || 'playing' },
+        };
       }
+      if (action === 'rate') {
+        const rating = url.searchParams.get('contentRating') || '';
+        ratings.set(url.searchParams.get('ratingKey'), rating === 'none' ? '' : rating);
+      }
+      if (action === 'sessions-status') sessionsStatus = Number(url.searchParams.get('status') || 200);
       if (action === 'stop') state.session = null;
       if (action === 'down') state.down = true;
       if (action === 'up') state.down = false;
       if (action === 'stats') return json(200, { ...stats });
+      if (action === 'log') return json(200, { requests: [...log] });
       if (action === 'reset-stats') {
         stats.transcode = 0;
         stats.other = 0;
+        log.length = 0;
         return json(200, { ok: true });
       }
       return json(200, { ok: true, ...state });
@@ -77,6 +109,9 @@ export async function startMockPlex({ port = 32401, host = '127.0.0.1' } = {}) {
     }
     if (url.searchParams.get('X-Plex-Token') !== TOKEN) return json(401, { error: 'Unauthorized' });
     stats[url.pathname === '/photo/:/transcode' ? 'transcode' : 'other']++;
+    const query = new URLSearchParams(url.searchParams);
+    query.delete('X-Plex-Token');
+    log.push(url.pathname + (query.size ? `?${query}` : ''));
 
     const strip = (m) => Object.fromEntries(Object.entries(m).filter(([k]) => k !== 'color'));
     const path = url.pathname;
@@ -85,19 +120,22 @@ export async function startMockPlex({ port = 32401, host = '127.0.0.1' } = {}) {
       return json(200, { MediaContainer: { Directory: [{ key: '1', title: 'Movies', type: 'movie' }, { key: '2', title: 'Music', type: 'artist' }] } });
     }
     if (path === '/status/sessions') {
+      if (sessionsStatus !== 200) return json(sessionsStatus, { error: `Mock: sessions answer ${sessionsStatus}` });
       return json(200, { MediaContainer: { size: state.session ? 1 : 0, Metadata: state.session ? [strip(state.session)] : [] } });
     }
     if (path === '/library/sections/1/all') {
       const size = Number(url.searchParams.get('X-Plex-Container-Size') || MOVIES.length);
       const wanted = url.searchParams.get('contentRating');
-      const ratings = wanted === null ? null : wanted.split(',');
-      const items = ratings ? MOVIES.filter((m) => m.contentRating && ratings.includes(m.contentRating)) : MOVIES;
+      const allowed = wanted === null ? null : wanted.split(',');
+      const items = allowed ? MOVIES.map(current).filter((m) => m.contentRating && allowed.includes(m.contentRating)) : MOVIES.map(current);
       return json(200, { MediaContainer: { Metadata: items.slice(0, size).map(strip) } });
     }
-    const meta = path.match(/^\/library\/metadata\/(\d+)$/);
+    // One key, or several joined by commas (a batched lookup): the ones that exist, in the order asked. A single
+    // unknown key is a 404; unknown keys in a list are just absent.
+    const meta = path.match(/^\/library\/metadata\/(\d+(?:,\d+)*)$/);
     if (meta) {
-      const m = MOVIES.find((x) => x.ratingKey === meta[1]);
-      return m ? json(200, { MediaContainer: { Metadata: [strip(m)] } }) : json(404, {});
+      const found = meta[1].split(',').map((k) => MOVIES.find((x) => x.ratingKey === k)).filter(Boolean);
+      return found.length || meta[1].includes(',') ? json(200, { MediaContainer: { Metadata: found.map((m) => strip(current(m))) } }) : json(404, {});
     }
     if (path === '/photo/:/transcode') {
       const thumb = url.searchParams.get('url') || '';
