@@ -87,3 +87,8 @@ Decisions that bind the integration plan (`docs/integration-plan.md`) and spec (
 
 - **D35 Content filter: one more round.** One more owner-authorised `content-rating-filter` round, then land: an imported pin survives Save (the dialog keeps its pending pin; C7I1); a stricter limit saved during a crossfade also removes an outgoing above-limit poster at once (C7M1); a cached poster's stored rating is refreshed whenever the poster is seen online (C7M2).
 - **D36 An explicit null limit means no limit.** `"maxContentRating": null` is the same as leaving the setting out; only an unknown value fails closed (D31).
+
+## Stop 11 — 2026-10-10, owner answer "Defaults" (items 1–2; item 3, token rotation, still open)
+
+- **D37 Content filter lands; upward re-rating routed.** `content-rating-filter` lands as approved. Re-checking cached titles' ratings while a limit is set (one batched metadata request per online refresh; fail closed for any title not confirmed) is a must-fix for `metadata-and-now-playing`, and `real-server-validation-extended` confirms the request format.
+- **D38 Help text.** `settings-sheet` corrects the household-limit help text: posters above the limit are never shown except an owner-saved pin, and the playing title when "Apply the limit to what's playing right now" is off.
