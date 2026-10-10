@@ -73,3 +73,12 @@ Decisions that bind the integration plan (`docs/integration-plan.md`) and spec (
 ## Stop 7 — 2026-10-09, owner answer "Defaults"
 
 - **D28 Sleep mode lands; leftovers routed.** `sleep-mode` lands as approved. Each leftover becomes a must-fix for the later phase that edits that code: C8M1 (no second /status/sessions request in a tick after a failed playback poll with now-playing on) → `metadata-and-now-playing`, with K18; C8M2 (rebuild the Plex client before the wake tick when Save is the waking press) → `settings-sheet`; C8M3 (an automatic reload must not restart the idle-sleep clock) → `pi-stability`; A8-d (the heal path's second download is not drawn if sleep started during it) → `content-rating-filter`, with K5.
+
+## Stop 9 — 2026-10-09, owner answer "defaults" (items 1–5; item 6: P1 noted, token rotation still open)
+
+- **D29 Content filter past the retry cap.** One more owner-authorised `content-rating-filter` round: the settings dialog's live preview keeps the saved pin (`staticRatingKey`, `staticTitle`) as well as the saved limit, and every apply — previews and Cancel included — re-checks the poster on screen (C6I1); e2e case 18's final wait accepts any allowed poster (A6I1).
+- **D30 Display decode hang fixed now (Q25).** The `js/display.js` race (a previous draw's cleanup timer removes the `src` of a layer whose next `decode()` is pending; the decode never settles and rotation stops) is fixed as its own small conductor-added phase, `display-decode-hang`, landing before `content-rating-filter`. It supersedes K23's routing to `pixel-shift`.
+- **D31 An unknown limit fails closed (K21).** `js/settings.js` maps an unknown `maxContentRating` (e.g. `"PG13"`) to `PG-13` instead of `''`; the D29 round's Output extends to `js/settings.js` and `tests/settings.test.js` for this.
+- **D32 Pins stay exempt (K24).** Pinning an above-limit now-playing poster stays allowed (D5); `kiosk-and-pin` puts Settings and the pin control behind the owner's PIN.
+- **D33 TV episode ratings (C6M2).** Whether Plex rates episodes lower than their shows is checked on the real server in `real-server-validation-extended`; fixed only if it happens.
+- **D34 Conductor rulings kept.** K19 (changing the limit replaces an on-screen poster at once), K20 (offline: replaced by an allowed cached poster or the empty card). K22 retired (the after-decode re-check has a test). P1 (the sleep-mode predispatch/metrics slip) noted.
