@@ -4,6 +4,17 @@ import { detectWindow, findFrame, NO_FRAME, CUSTOM_FRAME_ID } from './frames.js'
 import { posterBox, stageSize } from './layout.js';
 
 const POSTER_ASPECT = 2 / 3;
+// A decode that has not settled by now never will (the same bound main.js puts on a poster download).
+const DECODE_TIMEOUT_MS = 20000;
+
+/** img.decode() that rejects instead of staying pending when the image cannot settle. */
+function decodeWithin(img, ms) {
+  let timer;
+  const limit = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('Image decode timed out.')), ms);
+  });
+  return Promise.race([img.decode(), limit]).finally(() => clearTimeout(timer));
+}
 
 export function createDisplay(root = document) {
   const el = {
@@ -17,6 +28,10 @@ export function createDisplay(root = document) {
   let frame = { src: '', window: NO_FRAME.window, aspect: POSTER_ASPECT };
   let front = 0;
   const objectUrls = new WeakMap();
+  // Which draw owns each layer. A cleanup timer may only touch a layer its own draw still owns:
+  // removing src before a load finishes leaves decode() pending forever, which stalled rotation.
+  const owners = new WeakMap();
+  let drawSeq = 0;
 
   async function loadFrame(s) {
     const builtIn = findFrame(s.frameId);
@@ -124,10 +139,16 @@ export function createDisplay(root = document) {
       const next = el.layers[1 - front];
       const prev = el.layers[front];
       const url = image instanceof Blob ? URL.createObjectURL(image) : image;
+      owners.set(next, ++drawSeq); // from here no earlier draw's timer may clear this layer
+      const stale = objectUrls.get(next); // its earlier draw's timer will now skip it, so release here
+      if (stale) {
+        URL.revokeObjectURL(stale);
+        objectUrls.delete(next);
+      }
       next.src = url;
       next.alt = poster.title ? `Poster: ${poster.title}` : 'Poster';
       try {
-        await next.decode();
+        await decodeWithin(next, DECODE_TIMEOUT_MS);
       } catch {
         if (image instanceof Blob) URL.revokeObjectURL(url);
         throw new Error('Poster image could not be decoded.');
@@ -141,8 +162,9 @@ export function createDisplay(root = document) {
 
       const old = objectUrls.get(prev);
       if (old) {
+        const owner = owners.get(prev);
         setTimeout(() => {
-          if (!prev.classList.contains('active')) {
+          if (owners.get(prev) === owner && !prev.classList.contains('active')) {
             URL.revokeObjectURL(old);
             objectUrls.delete(prev);
             prev.removeAttribute('src');
