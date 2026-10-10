@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildUrl, createPlexClient, discoverServers, pickNowPlaying, rankConnections } from '../js/plex.js';
+import { buildUrl, createPlexClient, discoverServers, pickNowPlaying, rankConnections, toPoster } from '../js/plex.js';
+import { allowedValues } from '../js/ratings.js';
 
 const jsonResponse = (body, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -38,7 +39,8 @@ test('client sends token in the query and only an Accept header (no CORS preflig
   };
   const client = createPlexClient({ serverUrl: 'http://h:32400/', token: 'tok', clientId: 'cid', fetchImpl });
   const pool = await client.pool({ libraryKey: '1', unwatchedOnly: true, size: 50 });
-  assert.deepEqual(pool, [{ ratingKey: '7', title: 'A', year: '1999', thumb: '/thumb/7', source: 'random', user: '' }]);
+  assert.deepEqual(pool, [{ ratingKey: '7', title: 'A', year: '1999', thumb: '/thumb/7', source: 'random', user: '', contentRating: '' }]);
+  assert.equal(calls[0].url.searchParams.get('contentRating'), null, 'no limit: no rating filter is sent');
   const { url, opts } = calls[0];
   assert.equal(url.pathname, '/library/sections/1/all');
   assert.equal(url.searchParams.get('X-Plex-Token'), 'tok');
@@ -88,4 +90,72 @@ test('discoverServers keeps only servers with usable connections', async () => {
   assert.equal(servers.length, 1);
   assert.equal(servers[0].accessToken, 'srv');
   assert.deepEqual(await discoverServers('cid', 't', { fetchImpl, secureOnly: true }), []);
+});
+
+// ---- content rating (R-FILT-1) ----
+
+function poolCalls(items = []) {
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(new URL(url));
+    return jsonResponse({ MediaContainer: { Metadata: items } });
+  };
+  return { calls, client: createPlexClient({ serverUrl: 'http://h:32400', token: 't', clientId: 'c', fetchImpl }) };
+}
+
+test('toPoster carries contentRating (movie, episode, and absent)', () => {
+  assert.equal(toPoster({ type: 'movie', ratingKey: '1', title: 'A', thumb: '/t', contentRating: 'PG-13' }, 'random').contentRating, 'PG-13');
+  assert.equal(toPoster({ type: 'movie', ratingKey: '1', title: 'A', thumb: '/t', contentRating: 'gb/12A' }, 'random').contentRating, 'gb/12A');
+  assert.equal(toPoster({ type: 'episode', ratingKey: '2', grandparentRatingKey: '9', title: 'E', thumb: '/t', contentRating: 'TV-MA' }, 'now-playing').contentRating, 'TV-MA');
+  assert.equal(toPoster({ type: 'movie', ratingKey: '1', title: 'A', thumb: '/t' }, 'random').contentRating, '');
+});
+
+test('pickNowPlaying and item() keep the rating', async () => {
+  const sessions = [{ type: 'movie', ratingKey: '1', title: 'A', thumb: '/t', contentRating: 'R', Player: { state: 'playing' } }];
+  assert.equal(pickNowPlaying(sessions).contentRating, 'R');
+  const { client } = poolCalls([{ ratingKey: '3', title: 'C', thumb: '/t/3', contentRating: 'PG' }]);
+  assert.equal((await client.item('3')).contentRating, 'PG');
+});
+
+test('pool(): without a limit the size is as asked and no rating filter is sent', async () => {
+  const { calls, client } = poolCalls();
+  await client.pool({ libraryKey: '1', size: 40 });
+  await client.pool({ libraryKey: '1', size: 40, maxContentRating: '' });
+  for (const url of calls) {
+    assert.equal(url.searchParams.get('X-Plex-Container-Size'), '40');
+    assert.equal(url.searchParams.has('contentRating'), false);
+  }
+});
+
+test('pool(): with a limit the container size is 3x the pool size, capped at 500', async () => {
+  const { calls, client } = poolCalls();
+  for (const [size, want] of [[10, '30'], [100, '300'], [166, '498'], [167, '500'], [400, '500'], [1000, '500']]) {
+    await client.pool({ libraryKey: '1', size, maxContentRating: 'PG-13' });
+    assert.equal(calls.at(-1).searchParams.get('X-Plex-Container-Size'), want, `size ${size}`);
+  }
+});
+
+test('pool(): the PG-13 request lists every allowed ladder and mapped prefixed value and nothing above', async () => {
+  const { calls, client } = poolCalls();
+  await client.pool({ libraryKey: '1', size: 100, maxContentRating: 'PG-13' });
+  const sent = calls[0].searchParams.get('contentRating').split(',');
+  assert.deepEqual(sent, allowedValues('PG-13'));
+  for (const v of ['G', 'PG', 'PG-13', 'TV-Y', 'TV-Y7', 'TV-G', 'TV-PG', 'TV-14', 'gb/12', 'gb/12A', 'de/12', 'fr/12', 'au/M', 'ca/14A', 'nl/12']) assert.ok(sent.includes(v), v);
+  for (const v of ['R', 'TV-MA', 'NC-17', 'gb/15', 'gb/18', 'au/MA15+']) assert.ok(!sent.includes(v), v);
+});
+
+test('pool(): a rating value with a plus sign survives the query string', async () => {
+  const { calls, client } = poolCalls();
+  await client.pool({ libraryKey: '1', size: 100, maxContentRating: 'R' });
+  assert.ok(calls[0].searchParams.get('contentRating').split(',').includes('au/MA15+'));
+});
+
+test('pool() returns the rating of each item and does not filter by it (the engine does)', async () => {
+  const { client } = poolCalls([
+    { ratingKey: '1', title: 'A', thumb: '/t/1', contentRating: 'G' },
+    { ratingKey: '2', title: 'B', thumb: '/t/2', contentRating: 'R' },
+    { ratingKey: '3', title: 'C', thumb: '/t/3' },
+  ]);
+  const pool = await client.pool({ libraryKey: '1', size: 10, maxContentRating: 'PG' });
+  assert.deepEqual(pool.map((p) => p.contentRating), ['G', 'R', '']);
 });

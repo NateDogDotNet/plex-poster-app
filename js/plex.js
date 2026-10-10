@@ -3,6 +3,8 @@
 // Requests deliberately stay CORS-"simple" (GET/POST, only an Accept header, token in
 // the query string) so browsers don't send a preflight that some Plex servers reject.
 
+import { allowedValues } from './ratings.js';
+
 export const PRODUCT = 'Plex Poster Display';
 const PLEX_TV = 'https://plex.tv';
 
@@ -113,6 +115,7 @@ export function toPoster(m, source) {
     thumb,
     source, // 'now-playing' | 'random' | 'static' | 'cache'
     user: m.User?.title || '',
+    contentRating: typeof m.contentRating === 'string' ? m.contentRating : '', // '' = unrated or missing
   };
 }
 
@@ -137,13 +140,18 @@ export function createPlexClient({ serverUrl, token, clientId, fetchImpl = (...a
       return c.Metadata || [];
     },
 
-    /** Top-rated items in a library section, used as the random pool. */
-    async pool({ libraryKey, unwatchedOnly = true, size = 100 }) {
+    /**
+     * Top-rated items in a library section, used as the random pool. With a `maxContentRating` it asks Plex
+     * for the allowed ratings only and oversamples (3x, at most 500) because filtering shrinks the pool.
+     * The server filter is a convenience (its syntax is unverified): the engine re-checks every poster.
+     */
+    async pool({ libraryKey, unwatchedOnly = true, size = 100, maxContentRating = '' }) {
       const c = await get(`/library/sections/${encodeURIComponent(libraryKey)}/all`, {
         unwatched: unwatchedOnly ? 1 : '',
         sort: 'rating:desc',
+        contentRating: allowedValues(maxContentRating).join(','),
         'X-Plex-Container-Start': 0,
-        'X-Plex-Container-Size': size,
+        'X-Plex-Container-Size': maxContentRating ? Math.min(size * 3, 500) : size,
       });
       return (c.Metadata || []).filter((m) => m.thumb).map((m) => toPoster(m, 'random'));
     },

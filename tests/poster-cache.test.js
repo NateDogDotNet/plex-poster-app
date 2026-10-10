@@ -32,7 +32,7 @@ function fakeCaches({ matchThrows = false } = {}) {
   return { caches: { open: async () => cache, delete: async () => true }, store, calls };
 }
 
-const poster = (n, thumb = `/t/${n}`) => ({ ratingKey: String(n), title: `P${n}`, year: 2000 + n, thumb });
+const poster = (n, thumb = `/t/${n}`, contentRating = undefined) => ({ ratingKey: String(n), title: `P${n}`, year: 2000 + n, thumb, contentRating });
 const blob = (text = 'img') => new Blob([text], { type: 'image/jpeg' });
 const size = (width, height = width * 1.5) => ({ width, height });
 
@@ -183,4 +183,118 @@ test('unavailable caches: lookup is a miss, put is a no-op', async () => {
   assert.equal(pc.available, false);
   assert.equal(await pc.lookup(poster(1), size(600)), null);
   await pc.put(poster(1), blob(), size(600));
+});
+
+// ---- content rating (R-FILT-1) ----
+
+test('put records the poster contentRating in the index entry ("" when it has none)', async () => {
+  const pc = createPosterCache({ storage: memoryStorage(), caches: fakeCaches().caches });
+  await pc.put(poster(1, '/t/1', 'PG-13'), blob(), size(600));
+  await pc.put(poster(2, '/t/2', 'gb/12A'), blob(), size(600));
+  await pc.put(poster(3), blob(), size(600));
+  const byKey = Object.fromEntries(pc.entries().map((e) => [e.ratingKey, e.contentRating]));
+  assert.deepEqual(byKey, { 1: 'PG-13', 2: 'gb/12A', 3: '' });
+});
+
+// C7M2 (D35): a poster seen online refreshes its stored rating, so a re-rated title does not keep its old rating offline.
+test('refreshRating rewrites the stored rating from the poster, keeping the order and the other fields', async () => {
+  const pc = createPosterCache({ storage: memoryStorage(), caches: fakeCaches().caches });
+  await pc.put(poster(1, '/t/1', 'PG'), blob(), size(600, 900));
+  await pc.put(poster(2, '/t/2', 'G'), blob(), size(600, 900));
+  const before = pc.entries();
+  await pc.refreshRating(poster(1, '/t/1', 'R'));
+  const after = pc.entries();
+  assert.deepEqual(after.map((e) => e.ratingKey), before.map((e) => e.ratingKey), 'order unchanged');
+  assert.equal(after.find((e) => e.ratingKey === '1').contentRating, 'R');
+  assert.equal(after.find((e) => e.ratingKey === '2').contentRating, 'G', 'other entries untouched');
+  assert.deepEqual({ ...after.find((e) => e.ratingKey === '1'), contentRating: 'PG' }, before.find((e) => e.ratingKey === '1'), 'every other field kept');
+  await pc.refreshRating(poster(2, '/t/2')); // now unrated
+  assert.equal(pc.entries().find((e) => e.ratingKey === '2').contentRating, '', 'a poster with no rating stores ""');
+});
+
+test('refreshRating makes a re-rated title drop out of the offline draw under the limit', async () => {
+  const pc = createPosterCache({ storage: memoryStorage(), caches: fakeCaches().caches });
+  await pc.put(poster(1, '/t/1', 'PG'), blob(), size(600));
+  assert.equal((await pc.random(undefined, 'PG-13'))?.poster.ratingKey, '1');
+  await pc.refreshRating(poster(1, '/t/1', 'R'));
+  assert.equal(await pc.random(undefined, 'PG-13'), null);
+});
+
+test('refreshRating ignores a poster that is not cached and writes nothing when the rating is unchanged', async () => {
+  const f = fakeCaches();
+  const storage = memoryStorage();
+  let writes = 0;
+  const counting = { ...storage, setItem: (k, v) => (writes++, storage.setItem(k, v)) };
+  const pc = createPosterCache({ storage: counting, caches: f.caches });
+  await pc.put(poster(1, '/t/1', 'PG'), blob(), size(600));
+  const writesBefore = writes;
+  const putsBefore = f.calls.put;
+  await pc.refreshRating(poster(9, '/t/9', 'R'));
+  await pc.refreshRating(poster(1, '/t/1', 'PG'));
+  assert.equal(writes, writesBefore, 'no index write');
+  assert.equal(f.calls.put, putsBefore, 'no cache write');
+  assert.deepEqual(pc.entries().map((e) => e.ratingKey), ['1'], 'no entry was added');
+});
+
+async function filled(ratings) {
+  const pc = createPosterCache({ storage: memoryStorage(), caches: fakeCaches().caches });
+  for (const [i, r] of ratings.entries()) await pc.put(poster(i + 1, `/t/${i + 1}`, r), blob(`b${i + 1}`), size(600));
+  return pc;
+}
+const drawKeys = async (pc, limit, excludeKey, draws = 60) => {
+  const seen = new Set();
+  for (let i = 0; i < draws; i++) {
+    const hit = await pc.random(excludeKey, limit);
+    seen.add(hit ? hit.poster.ratingKey : null);
+  }
+  return [...seen].sort();
+};
+
+test('random() skips entries above the limit while a limit is set', async () => {
+  const pc = await filled(['G', 'PG-13', 'R', 'TV-MA', 'NC-17', 'gb/12', 'gb/15']);
+  assert.deepEqual(await drawKeys(pc, 'PG-13'), ['1', '2', '6']);
+  assert.deepEqual(await drawKeys(pc, 'R'), ['1', '2', '3', '4', '6', '7']);
+  assert.deepEqual(await drawKeys(pc, 'G'), ['1']);
+});
+
+test('random() skips entries without a stored rating (cached before 2.1) while a limit is set', async () => {
+  const storage = memoryStorage();
+  storage.setItem('plexPoster.posterIndex', JSON.stringify([{ ratingKey: '9', title: 'Old', thumb: '/t/9', width: 600 }, { ratingKey: '8', title: 'Blank', thumb: '/t/8', width: 600, contentRating: '' }]));
+  const f = fakeCaches();
+  const pc = createPosterCache({ storage, caches: f.caches });
+  await pc.put(poster(1, '/t/1', 'G'), blob(), size(600));
+  const cache = await f.caches.open();
+  await cache.put('http://localhost/__posters__/9', new Response('x'));
+  await cache.put('http://localhost/__posters__/8', new Response('x'));
+  assert.deepEqual(await drawKeys(pc, 'NC-17'), ['1']);
+  assert.deepEqual(await drawKeys(pc, ''), ['1', '8', '9']);
+});
+
+test('random() skips unmapped and non-string ratings while a limit is set', async () => {
+  const pc = await filled(['gb/XX', 'Not Rated', 'NR', 'G']);
+  assert.deepEqual(await drawKeys(pc, 'NC-17'), ['4']);
+});
+
+test('random() with no limit (or none given) draws from every entry', async () => {
+  const pc = await filled(['G', 'R', undefined, 'NC-17']);
+  assert.deepEqual(await drawKeys(pc, ''), ['1', '2', '3', '4']);
+  assert.deepEqual(await drawKeys(pc, undefined), ['1', '2', '3', '4']);
+  assert.deepEqual(await drawKeys(pc), ['1', '2', '3', '4']);
+});
+
+test('random() returns null when nothing in the cache is allowed', async () => {
+  const pc = await filled(['R', 'NC-17', undefined]);
+  assert.equal(await pc.random(undefined, 'PG-13'), null);
+});
+
+test('random() with a limit still honours excludeKey and returns the blob', async () => {
+  const pc = await filled(['G', 'PG', 'R']);
+  assert.deepEqual(await drawKeys(pc, 'PG-13', '1'), ['2']);
+  const hit = await pc.random('1', 'PG-13');
+  assert.equal(hit.poster.ratingKey, '2');
+  assert.equal(hit.poster.source, 'cache');
+  assert.equal(hit.poster.contentRating, 'PG');
+  assert.equal(await hit.blob.text(), 'b2');
+  // only one allowed entry and it is the excluded one: it is still the only choice (the same rule as without a limit)
+  assert.equal((await pc.random('2', 'G'))?.poster.ratingKey, '1');
 });

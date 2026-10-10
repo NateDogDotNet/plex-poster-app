@@ -67,6 +67,10 @@ body.idle.hide-cursor, body.idle.hide-cursor * { cursor: none !important; }
   transition: opacity var(--fade-ms) ease;
 }
 .poster-layer.active { opacity: 1; }
+/* A poster that is above the household limit is taken off the screen at once, without the fade (K20). */
+body.poster-blocked .poster-layer, body.poster-blocked .title-card { opacity: 0; transition: none; visibility: hidden; }
+/* A poster still fading out when the limit is tightened is hidden at once, not faded (C7M1). */
+.poster-layer.cut:not(.active) { opacity: 0; transition: none; }
 
 .frame {
   position: absolute;

@@ -162,7 +162,14 @@ test('enumerations fall back to the default', () => {
   assert.equal(sanitize({ statusIndicator: 'text' }).statusIndicator, 'dot');
   assert.equal(sanitize({ statusIndicator: 'off' }).statusIndicator, 'off');
   for (const r of ['', 'G', 'PG', 'PG-13', 'R', 'NC-17']) assert.equal(sanitize({ maxContentRating: r }).maxContentRating, r);
-  assert.equal(sanitize({ maxContentRating: 'X' }).maxContentRating, '');
+  // K21 (D31): an unknown limit fails closed to PG-13, never to "no limit"; absent or null still means no limit.
+  for (const junk of ['X', 'PG13', 'pg13', 'pg-13', 'R18', ' R ', 'NC17', 5, true, {}, []]) {
+    assert.equal(sanitize({ maxContentRating: junk }).maxContentRating, 'PG-13', `maxContentRating ${JSON.stringify(junk)}`);
+  }
+  assert.equal(sanitize({}).maxContentRating, '');
+  assert.equal(sanitize({ maxContentRating: null }).maxContentRating, '');
+  assert.equal(sanitize({ maxContentRating: undefined }).maxContentRating, '');
+  assert.equal(defaults().maxContentRating, '');
   assert.equal(sanitize({ nightDimTarget: 'stage' }).nightDimTarget, 'stage');
   assert.equal(sanitize({ nightDimTarget: 'x' }).nightDimTarget, 'frame');
   for (const c of ['auto', 'always', 'never']) assert.equal(sanitize({ controlLabels: c }).controlLabels, c);

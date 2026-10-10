@@ -15,6 +15,9 @@ export function createSettingsUI({ getSettings, clientId, log, onPreview, onSave
   let original = null;
   let pinAbort = null;
   let servers = [];
+  // The pin the dialog would save: set by write() (open and import), cleared by Unpin, used by read(). It is separate
+  // from the saved pin, which the live preview keeps applying until Save (an unsaved pin is never drawn, D29).
+  let pendingPin = { key: '', title: '' };
 
   // Frame options are built from the registry so new frames only need adding there.
   $('frame-select').replaceChildren(
@@ -27,8 +30,12 @@ export function createSettingsUI({ getSettings, clientId, log, onPreview, onSave
       if (el.type === 'checkbox') el.checked = Boolean(s[el.name]);
       else el.value = String(s[el.name]);
     }
+    // The household toggle is UI-only: on when a limit is set; off stores ''. The select keeps PG-13 while off.
+    $('household-toggle').checked = Boolean(s.maxContentRating);
+    field('maxContentRating').value = s.maxContentRating || 'PG-13';
     ensureLibraryOption(s.libraryKey, s.libraryName);
     field('libraryKey').value = s.libraryKey;
+    pendingPin = { key: s.staticRatingKey || '', title: s.staticTitle || '' };
     $('pinned-title').textContent = s.staticRatingKey ? s.staticTitle || `item ${s.staticRatingKey}` : 'none';
     $('unpin-btn').hidden = !s.staticRatingKey;
     syncDependent();
@@ -40,17 +47,17 @@ export function createSettingsUI({ getSettings, clientId, log, onPreview, onSave
       if (!el.name || !(el.name in s)) continue;
       s[el.name] = el.type === 'checkbox' ? el.checked : el.value;
     }
+    s.maxContentRating = $('household-toggle').checked ? field('maxContentRating').value : '';
     const lib = field('libraryKey');
     s.libraryName = lib.selectedOptions[0]?.dataset.title || s.libraryName;
-    if ($('unpin-btn').dataset.cleared === '1') {
-      s.staticRatingKey = '';
-      s.staticTitle = '';
-    }
+    s.staticRatingKey = pendingPin.key;
+    s.staticTitle = pendingPin.title;
     return sanitize(s);
   }
 
   function syncDependent() {
     $('custom-frame-row').hidden = field('frameId').value !== CUSTOM_FRAME_ID;
+    $('household-options').hidden = !$('household-toggle').checked;
     field('username').disabled = !field('showNowPlaying').checked;
     field('includeEpisodes').disabled = !field('showNowPlaying').checked;
     for (const out of form.querySelectorAll('output[data-for]')) {
@@ -232,7 +239,7 @@ export function createSettingsUI({ getSettings, clientId, log, onPreview, onSave
   });
 
   $('unpin-btn').addEventListener('click', (e) => {
-    e.target.dataset.cleared = '1';
+    pendingPin = { key: '', title: '' };
     e.target.hidden = true;
     $('pinned-title').textContent = 'none (unpinned on save)';
   });
@@ -275,7 +282,6 @@ export function createSettingsUI({ getSettings, clientId, log, onPreview, onSave
     open({ firstRun = false } = {}) {
       if (dialog.open) return;
       original = getSettings();
-      $('unpin-btn').dataset.cleared = '';
       $('form-error').textContent = '';
       $('test-result').textContent = '';
       $('first-run-hint').hidden = !firstRun;

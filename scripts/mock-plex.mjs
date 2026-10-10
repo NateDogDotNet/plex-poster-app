@@ -7,27 +7,32 @@
 //   GET  /__mock/stats                        {transcode, other}: image requests vs other Plex requests
 //   POST /__mock/reset-stats                  zero those counters
 //   POST /__mock/down  /  POST /__mock/up      simulate the server going offline
+//
+// The 8 titles carry contentRating G, PG, PG-13, R, TV-MA, gb/12, gb/15 and none (title 8, as an unrated
+// Plex item has no attribute). /library/sections/1/all honours `contentRating=a,b,c` strictly: a title whose
+// rating is not in the list, or that has none, is dropped before paging. Other unknown parameters are ignored.
 
 import { createServer } from 'node:http';
 
 export const TOKEN = 'demo-token';
 
 const MOVIES = [
-  ['The Grand Marquee', 1954, '#8b1e3f'],
-  ['Midnight Projector', 1961, '#1e4f8b'],
-  ['Velvet Curtain', 1972, '#5b2a86'],
-  ['Popcorn Skies', 1985, '#b5651d'],
-  ['Neon Matinee', 1993, '#127a6b'],
-  ['Last Reel', 2004, '#6b6b12'],
-  ['Silver Screen Serenade', 2016, '#3a3a3a'],
-  ['Encore', 2023, '#a12828'],
-].map(([title, year, color], i) => ({
+  ['The Grand Marquee', 1954, '#8b1e3f', 'G'],
+  ['Midnight Projector', 1961, '#1e4f8b', 'PG'],
+  ['Velvet Curtain', 1972, '#5b2a86', 'PG-13'],
+  ['Popcorn Skies', 1985, '#b5651d', 'R'],
+  ['Neon Matinee', 1993, '#127a6b', 'TV-MA'],
+  ['Last Reel', 2004, '#6b6b12', 'gb/12'],
+  ['Silver Screen Serenade', 2016, '#3a3a3a', 'gb/15'],
+  ['Encore', 2023, '#a12828', undefined], // unrated: no contentRating attribute
+].map(([title, year, color, contentRating], i) => ({
   ratingKey: String(i + 1),
   key: `/library/metadata/${i + 1}`,
   type: 'movie',
   title,
   year,
   color,
+  ...(contentRating ? { contentRating } : {}),
   rating: 9 - i * 0.4,
   thumb: `/library/metadata/${i + 1}/thumb/1700000000`,
 }));
@@ -84,7 +89,10 @@ export async function startMockPlex({ port = 32401, host = '127.0.0.1' } = {}) {
     }
     if (path === '/library/sections/1/all') {
       const size = Number(url.searchParams.get('X-Plex-Container-Size') || MOVIES.length);
-      return json(200, { MediaContainer: { Metadata: MOVIES.slice(0, size).map(strip) } });
+      const wanted = url.searchParams.get('contentRating');
+      const ratings = wanted === null ? null : wanted.split(',');
+      const items = ratings ? MOVIES.filter((m) => m.contentRating && ratings.includes(m.contentRating)) : MOVIES;
+      return json(200, { MediaContainer: { Metadata: items.slice(0, size).map(strip) } });
     }
     const meta = path.match(/^\/library\/metadata\/(\d+)$/);
     if (meta) {

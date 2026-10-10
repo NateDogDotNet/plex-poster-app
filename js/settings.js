@@ -73,7 +73,8 @@ const SCHEMA = {
   posterCacheLimit: [100, strictNum(10, 300, { int: true })],
 
   // Content filter
-  maxContentRating: ['', oneOf('', 'G', 'PG', 'PG-13', 'R', 'NC-17')],
+  // An unknown limit (a typo, a hand-edited file) fails closed to PG-13, never to "no limit" (K21, D31). Absent stays ''.
+  maxContentRating: ['', (v) => (['', 'G', 'PG', 'PG-13', 'R', 'NC-17'].includes(v) ? v : 'PG-13')],
   limitNowPlaying: [true, bool],
 
   // Display protection

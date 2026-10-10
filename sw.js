@@ -18,6 +18,7 @@ const SHELL = [
   'js/layout.js',
   'js/plex.js',
   'js/poster-cache.js',
+  'js/ratings.js',
   'js/schedule.js',
   'js/settings.js',
   'js/settings-ui.js',

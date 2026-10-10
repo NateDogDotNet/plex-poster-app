@@ -1,6 +1,8 @@
 // Keeps the most recently shown posters (image + metadata) in the Cache API so the
 // display keeps cycling real artwork while the Plex server is unreachable.
 
+import { allows } from './ratings.js';
+
 const CACHE_NAME = 'plex-posters-v1';
 const INDEX_KEY = 'plexPoster.posterIndex';
 const PREFIX = '/__posters__/';
@@ -46,11 +48,25 @@ export function createPosterCache({ storage, limit = DEFAULT_LIMIT, caches = glo
       if (!available) return;
       const cache = await caches.open(CACHE_NAME);
       await cache.put(keyUrl(poster.ratingKey), new Response(blob, { headers: { 'Content-Type': blob.type || 'image/jpeg' } }));
-      const meta = { ratingKey: poster.ratingKey, title: poster.title, year: poster.year, thumb: poster.thumb, width: size.width, height: size.height, savedAt: Date.now() };
+      const meta = { ratingKey: poster.ratingKey, title: poster.title, year: poster.year, thumb: poster.thumb, contentRating: poster.contentRating || '', width: size.width, height: size.height, savedAt: Date.now() };
       const list = [meta, ...readIndex().filter((e) => e.ratingKey !== poster.ratingKey)];
       const evicted = list.splice(maxEntries());
       writeIndex(list);
       await Promise.all(evicted.map((e) => cache.delete(keyUrl(e.ratingKey))));
+    },
+
+    /**
+     * A poster seen online carries its current rating: store it, so a re-rated title does not keep its old rating
+     * for the offline fallback. Only the rating of an existing entry changes (no re-order, no blob write); nothing
+     * is written when it already matches or the poster is not cached.
+     */
+    refreshRating(poster) {
+      const list = readIndex();
+      const entry = list.find((e) => e.ratingKey === poster.ratingKey);
+      const contentRating = poster.contentRating || '';
+      if (!entry || entry.contentRating === contentRating) return;
+      entry.contentRating = contentRating;
+      writeIndex(list);
     },
 
     /** Drops one poster (blob and index entry), e.g. when its stored blob proves undecodable. */
@@ -84,9 +100,12 @@ export function createPosterCache({ storage, limit = DEFAULT_LIMIT, caches = glo
       }
     },
 
-    /** A random cached poster other than `excludeKey`, with its blob. */
-    async random(excludeKey) {
-      const list = readIndex();
+    /**
+     * A random cached poster other than `excludeKey`, with its blob. While `maxContentRating` is set, entries
+     * above it and entries with no stored rating (cached before 2.1) are never returned.
+     */
+    async random(excludeKey, maxContentRating = '') {
+      const list = readIndex().filter((e) => allows(maxContentRating, e.contentRating));
       const pool = list.length > 1 ? list.filter((e) => e.ratingKey !== excludeKey) : list;
       for (const meta of pool.sort(() => Math.random() - 0.5)) {
         const blob = await this.get(meta.ratingKey);

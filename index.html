@@ -129,6 +129,24 @@
         </fieldset>
 
         <fieldset>
+          <legend>Household</legend>
+          <label class="check"><input id="household-toggle" type="checkbox" /> Household with children</label>
+          <div id="household-options" hidden>
+            <label>Show posters rated up to
+              <select name="maxContentRating">
+                <option value="G">G (TV-Y, TV-G)</option>
+                <option value="PG">PG (TV-Y7, TV-PG)</option>
+                <option value="PG-13">PG-13 (TV-14)</option>
+                <option value="R">R (TV-MA)</option>
+                <option value="NC-17">NC-17</option>
+              </select>
+            </label>
+            <label class="check"><input name="limitNowPlaying" type="checkbox" /> Apply the limit to what's playing right now</label>
+          </div>
+          <p class="muted small">Posters rated above the limit are never shown, online or from the offline cache. Unrated titles are hidden too. A pinned poster is always shown.</p>
+        </fieldset>
+
+        <fieldset>
           <legend>Timing</legend>
           <label>Change poster every
             <span class="input-row"><input name="rotateSeconds" type="number" min="10" step="10" /> <span class="muted">seconds</span></span>

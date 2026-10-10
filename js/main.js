@@ -5,6 +5,7 @@ import { createDisplay } from './display.js';
 import { createEngine } from './engine.js';
 import { createPlexClient } from './plex.js';
 import { createPosterCache } from './poster-cache.js';
+import { allows } from './ratings.js';
 import { requestSize } from './layout.js';
 import { isPlausibleClock } from './schedule.js';
 import { createSettingsUI } from './settings-ui.js';
@@ -33,6 +34,7 @@ const state = {
   directImages: false, // set when the server doesn't allow fetching images (CORS)
   wakeLock: null,
   busy: false,
+  forceAfter: false, // a forced tick was asked for while one was running; it runs when that one ends
   asleep: false,
   sleepWhy: '', // 'schedule' | 'idle' | 'manual wake' | ''
   playing: false, // the last poll saw a matching session (only polled while sleep needs it)
@@ -71,7 +73,69 @@ function schedule(ms) {
   state.timer = setTimeout(() => tick(), ms);
 }
 
+const REFUSED_RETRY_MS = 1000; // after a poster was refused at the draw, pick another soon, not a rotation later
 const cachedBlobs = new WeakSet(); // blobs served from the poster cache (not freshly downloaded)
+
+// ---------- Household limit on what is already on screen ----------
+
+/** May this poster stay on screen under the current settings? A pinned poster is exempt (D5), and so is a now-playing one unless `limitNowPlaying` is on. */
+function allowedOnScreen(poster) {
+  const s = state.settings;
+  if (allows(s.maxContentRating, poster.contentRating)) return true;
+  if (s.staticRatingKey && poster.ratingKey === s.staticRatingKey) return true;
+  return poster.source === 'now-playing' && s.limitNowPlaying === false;
+}
+
+// The poster that the last crossfade replaced: its layer may still be fading out when the limit changes (C7M1).
+let outgoingPoster = null;
+
+/**
+ * A poster fading out is still on screen. When it is no longer allowed, its layer is hidden at once (`.cut`, no fade);
+ * the poster fading in stays. The class is dropped by the next draw (showPoster).
+ */
+function cutOutgoing() {
+  if (!outgoingPoster || allowedOnScreen(outgoingPoster)) return;
+  document.querySelectorAll('.poster-layer:not(.active)').forEach((img) => {
+    img.classList.add('cut');
+    img.alt = '';
+  });
+  outgoingPoster = null;
+}
+
+/**
+ * Takes a poster that is not allowed off the screen at once, online or off (K20): the layers are hidden
+ * (`body.poster-blocked`, no fade) and the display forgets it, so a fallback or the empty card follows.
+ */
+function blockPoster() {
+  outgoingPoster = null;
+  document.body.classList.add('poster-blocked');
+  document.querySelectorAll('.poster-layer').forEach((img) => {
+    img.classList.remove('active');
+    img.alt = '';
+  });
+  display.currentPoster = null;
+  display.setTitle(null);
+}
+
+/**
+ * Draws a poster, but only if the CURRENT settings still allow it (R4): the limit may have been tightened while
+ * the image was downloading or decoding. Returns false, drawing nothing, when it is not allowed; the caller
+ * must then not mark it shown (the next tick picks another). A successful draw ends a block.
+ */
+async function showPoster(poster, image) {
+  if (!allowedOnScreen(poster)) return false;
+  document.querySelectorAll('.poster-layer.cut').forEach((img) => img.classList.remove('cut'));
+  const outgoing = display.currentPoster;
+  await display.show(poster, image);
+  if (!allowedOnScreen(poster)) {
+    blockPoster(); // the limit was tightened during the decode
+    return false;
+  }
+  outgoingPoster = outgoing;
+  cutOutgoing(); // the limit may have been tightened during the decode, with the old poster now fading out
+  document.body.classList.remove('poster-blocked');
+  return true;
+}
 
 async function fetchImage(poster, { skipCache = false } = {}) {
   const size = requestSize(display.posterSize(), window.devicePixelRatio || 1);
@@ -115,21 +179,31 @@ async function tick({ force = false } = {}) {
   try {
     const sessions = await pollPlayback(); // fetched once; decide() reuses it
     // Asleep: Plex is polled above, but no poster is chosen, fetched or shown.
-    const decision = state.asleep ? null : await engine.decide({ force, sessions });
+    const decision = state.asleep ? null : await engine.decide({ force: force || document.body.classList.contains('poster-blocked'), sessions });
+    let refused = false; // a poster was fetched but the limit no longer allows it
     if (decision) {
+      cache.refreshRating(decision.poster); // seen online: its stored rating follows Plex (C7M2)
       let image = await fetchImage(decision.poster);
+      // (Asleep by now: the download began before sleep did; it is not drawn under the veil.)
+      let drawn = false;
       if (!state.asleep) {
-        // (Asleep by now: the download began before sleep did; it is not drawn under the veil.)
         try {
-          await display.show(decision.poster, image);
+          drawn = await showPoster(decision.poster, image);
+          refused = !drawn;
         } catch (err) {
           if (!cachedBlobs.has(image)) throw err;
           // The cached copy will not decode: drop it and download once (no retry loop).
           log.warn(`Cached poster "${decision.poster.title}" is unreadable; downloading it again.`);
           await cache.delete(decision.poster.ratingKey).catch(() => {});
           image = await fetchImage(decision.poster, { skipCache: true });
-          await display.show(decision.poster, image);
+          if (!state.asleep) {
+            // (Sleep may have begun during this second download too.)
+            drawn = await showPoster(decision.poster, image);
+            refused = !drawn;
+          }
         }
+      }
+      if (drawn) {
         engine.shown(decision.poster);
         state.lastReason = decision.reason;
         log.info(`Showing "${decision.poster.title}" (${decision.reason})`);
@@ -141,13 +215,17 @@ async function tick({ force = false } = {}) {
     state.lastError = '';
     backoff.reset();
     showEmpty(false);
-    schedule(intervalMs());
+    schedule(refused ? REFUSED_RETRY_MS : intervalMs());
   } catch (err) {
     await handleFailure(err);
   } finally {
     state.busy = false;
     updateStatus();
     updatePinButton();
+    if (state.forceAfter) {
+      state.forceAfter = false;
+      tick({ force: true });
+    }
   }
 }
 
@@ -157,18 +235,31 @@ async function handleFailure(err) {
   const fatal = err.kind === 'auth' || err.kind === 'empty';
   log[fatal ? 'error' : 'warn'](err.message);
 
-  // Keep the screen interesting while Plex is unavailable: rotate through cached posters.
-  const current = engine?.current;
+  // Keep the screen interesting while Plex is unavailable: rotate through cached posters. Under a content
+  // limit only entries at or below it count (cache.random enforces that); a cached poster that will not
+  // decode is dropped from the cache and one more is tried, so a bad entry neither shows nor repeats.
+  const current = display.currentPoster ? engine?.current : null; // nothing on screen (blocked) = due at once
   const due = !current || Date.now() - (current.shownAt || 0) >= state.settings.rotateSeconds * 1000;
   if (due && !fatal && !state.asleep) {
-    const cached = await cache.random(current?.ratingKey).catch(() => null);
-    if (cached) {
-      await display.show(cached.poster, cached.blob).catch(() => {});
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const cached = await cache.random(current?.ratingKey, state.settings.maxContentRating).catch(() => null);
+      if (!cached) break;
+      try {
+        if (!(await showPoster(cached.poster, cached.blob))) continue; // no longer allowed: not drawn, not shown
+      } catch {
+        log.warn(`Cached poster "${cached.poster.title}" is unreadable; dropping it.`);
+        await cache.delete(cached.poster.ratingKey).catch(() => {});
+        continue;
+      }
       engine?.shown(cached.poster);
       state.lastReason = 'offline – cached';
+      break;
     }
   }
-  if (!display.currentPoster) showEmpty(true, err.message);
+  if (!display.currentPoster) {
+    const limited = state.settings.maxContentRating && !fatal;
+    showEmpty(true, limited ? 'No posters within the household limit are available while Plex is unreachable.' : err.message);
+  }
   // Asleep, the only thing to retry is the playback poll: keep it at its normal rate, not the 5 minute backoff.
   const retryMs = fatal ? 5 * 60 * 1000 : backoff.next();
   schedule(state.asleep ? Math.min(retryMs, state.settings.nowPlayingPollSeconds * 1000) : retryMs);
@@ -351,7 +442,19 @@ function setPaused(paused) {
 
 async function applySettings(next, { persist = true, preview = false } = {}) {
   const prev = state.settings;
+  // A live preview shows layout only. The household limit and the pin are never previewed (CCI1, C6I1): while the
+  // dialog is open the previous, saved values keep applying, so only Save changes them and Cancel has nothing to undo
+  // (an imported file that pins an above-limit title must not exempt it before it is saved).
+  if (preview) {
+    const { maxContentRating, limitNowPlaying, staticRatingKey, staticTitle } = prev;
+    next = { ...next, maxContentRating, limitNowPlaying, staticRatingKey, staticTitle };
+  }
   state.settings = persist ? save(storage, next) : next;
+  // Whatever is on screen is re-checked against the settings now in force on EVERY apply, previews and Cancel
+  // included, even offline (K20, D29). This comes BEFORE the frame is applied, because a custom frame's load has no
+  // timeout and must not keep an above-limit poster on screen.
+  if (display.currentPoster && !allowedOnScreen(display.currentPoster)) blockPoster();
+  else cutOutgoing(); // a poster still fading out under a crossfade is not allowed to finish its fade (C7M1)
   try {
     await display.apply(state.settings);
   } catch (err) {
@@ -375,7 +478,13 @@ async function applySettings(next, { persist = true, preview = false } = {}) {
     showEmpty(true, 'Connect to your Plex server to get started.');
     return;
   }
-  tick({ force: connectionChanged });
+  // Online, the forced tick below picks the replacement for a blocked poster; offline, handleFailure shows an
+  // allowed cached poster or the empty card.
+  const limitChanged = ['maxContentRating', 'limitNowPlaying'].some((k) => prev[k] !== state.settings[k]);
+  // A tick already running began before this save and may not honour it, so a forced tick is queued for when it ends.
+  const force = connectionChanged || limitChanged;
+  if (force && state.busy) state.forceAfter = true;
+  tick({ force });
 }
 
 const settingsUI = createSettingsUI({
@@ -397,7 +506,7 @@ const settingsUI = createSettingsUI({
 
 function togglePin() {
   const s = state.settings;
-  const current = engine?.current;
+  const current = display.currentPoster ? engine?.current : null; // a blocked poster is not on screen: it cannot be pinned
   if (s.staticRatingKey) {
     applySettings({ ...s, staticRatingKey: '', staticTitle: '' });
     toast('Unpinned — rotating posters again.');

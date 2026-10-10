@@ -2,6 +2,7 @@
 // main.js calls `decide()` on a timer and renders whatever it returns.
 
 import { pickNowPlaying } from './plex.js';
+import { allows } from './ratings.js';
 
 const POOL_TTL_MS = 30 * 60 * 1000;
 const HISTORY = 10;
@@ -15,13 +16,17 @@ export function createEngine({ client, getSettings, now = () => Date.now(), rand
   const recent = [];
 
   async function loadPool(s) {
-    const key = `${s.libraryKey}|${s.unwatchedOnly}|${s.randomPoolSize}`;
+    const key = `${s.libraryKey}|${s.unwatchedOnly}|${s.randomPoolSize}|${s.maxContentRating}`;
     if (pool.length && key === poolKey && now() - poolAt < POOL_TTL_MS) return pool;
-    pool = await client.pool({ libraryKey: s.libraryKey, unwatchedOnly: s.unwatchedOnly, size: s.randomPoolSize });
+    pool = await client.pool({ libraryKey: s.libraryKey, unwatchedOnly: s.unwatchedOnly, size: s.randomPoolSize, maxContentRating: s.maxContentRating });
     poolKey = key;
     poolAt = now();
     return pool;
   }
+
+  // The one place the limit is enforced for server-supplied posters: random picks and now-playing both
+  // go through it, whatever Plex returned. (A pinned poster is exempt and never does.)
+  const permitted = (s, poster) => allows(s.maxContentRating, poster.contentRating);
 
   function pickRandom(items) {
     const fresh = items.filter((p) => !recent.includes(p.ratingKey) && p.ratingKey !== current?.ratingKey);
@@ -70,7 +75,8 @@ export function createEngine({ client, getSettings, now = () => Date.now(), rand
 
       // Now playing wins over everything; a pinned poster replaces random rotation.
       if (s.showNowPlaying) {
-        const np = pickNowPlaying(sessions ?? (await client.sessions()), s);
+        let np = pickNowPlaying(sessions ?? (await client.sessions()), s);
+        if (np && s.limitNowPlaying !== false && !permitted(s, np)) np = null; // above the limit or unrated: nothing is playing
         if (np) {
           if (!force && current?.source === 'now-playing' && current.ratingKey === np.ratingKey) return null;
           return { poster: np, reason: np.user ? `now playing for ${np.user}` : 'now playing' };
@@ -87,8 +93,11 @@ export function createEngine({ client, getSettings, now = () => Date.now(), rand
       const due = now() - lastRotateAt >= s.rotateSeconds * 1000;
       if (!force && !playbackEnded && !due && current) return null;
 
-      const next = pickRandom(await loadPool(s));
-      if (!next) throw Object.assign(new Error('No posters found in that library (try turning off "unwatched only").'), { kind: 'empty' });
+      const next = pickRandom((await loadPool(s)).filter((p) => permitted(s, p)));
+      if (!next) {
+        const hint = s.maxContentRating ? ` at or below ${s.maxContentRating} (try turning off "unwatched only" or raise the limit)` : ' (try turning off "unwatched only")';
+        throw Object.assign(new Error(`No posters found in that library${hint}.`), { kind: 'empty' });
+      }
       return { poster: next, reason: playbackEnded ? 'playback ended' : force ? 'manual refresh' : 'rotation' };
     },
   };
