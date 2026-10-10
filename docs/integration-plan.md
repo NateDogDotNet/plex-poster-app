@@ -617,6 +617,22 @@ One remaining fill feature, the extended real-server validation, the single docs
   - Hand-off checklist: (1) `git clone --mirror` a backup somewhere safe; (2) install `git-filter-repo` **(verify the package name for your OS)**; (3) in a fresh clone: `git filter-repo --invert-paths --path config.js`; (4) re-add `origin`; (5) `git push --force-with-lease --all && git push --force --tags`; (6) tell every collaborator to re-clone and re-sync the conductor's checkout (`git fetch --prune --force`, reset each local branch, drop stale refs); (7) ask GitHub support to drop cached views and check forks if the repo was public; (8) record `Purged: yes` and the date in `docs/security/history-purge.md`.
   - Irreversible: every SHA changes, so it runs after `release-bump`. Rotation (`rotate-plex-token`) is what actually removes the risk; a purge only removes the evidence. Do not rewrite history on the branch the conductor is committing to while it is running.
 
+### 28. `display-decode-hang` — Rotation never stalls on a pending image decode (added at stop 9, D30)
+
+- **Goal:** A draw that starts while the previous draw's cleanup timer is due can never leave `decode()` pending forever, so rotation never stops until a reload.
+- **Findings:** Q25 (confirmed by the `content-rating-filter` r4 anchored review) · **Requirements:** — (rotation reliability; no spec row names it) · **Rulings:** D30
+- **Mode:** afk · **Tags:** — · **Blocked by:** `rotation-layout-and-shell`
+- **Output:** `js/display.js`, `tests/e2e/display-decode.spec.mjs`
+- **Acceptance criteria:**
+  1. `npm test`
+  2. `npm run test:e2e -- display-decode`  (refreshes spaced exactly crossfadeMs + 200 ms apart, 60 presses each with `crossfadeMs: 0` and `crossfadeMs: 1200`: every press settles — the next refresh is accepted and the active poster layer changes — and no `decode()` is left pending; the spec fails against the `js/display.js` at the base commit)
+  3. `node scripts/check-precache.mjs`
+  4. `test -z "$(git status --porcelain -- js/main.js index.html css sw.js)"`
+  5. narrated: independent reviewer tries to stall rotation (rapid refreshes, a now-playing switch, a forced tick, a slow image, an image that fails to load) and confirms the crossfade still looks the same.
+- **Notes/hazards:**
+  - Root cause (Chromium): removing `src` from an `<img>` before its load finishes leaves `decode()` pending forever; the cleanup timer for the previous draw (crossfadeMs + 200 ms) removes the `src` of the layer the next draw is decoding on. The fix must make the cleanup never touch a layer that a newer draw owns (e.g. a draw generation counter checked by the timer), and/or bound `decode()` so a stuck decode rejects instead of hanging.
+  - `content-rating-filter` case 18 flaked on this race; once this lands that spec should be stable.
+
 ---
 
 ## Dependency graph
@@ -652,6 +668,7 @@ One remaining fill feature, the extended real-server validation, the single docs
 | 25 | `docs` | afk | `recommended-protection-preset`, `position-drag-nudge`, `fill-blur-and-info`, `real-server-validation-extended` |
 | 26 | `release-bump` | afk | `docs`, `rotate-plex-token`, `real-server-validation`, `real-server-validation-extended` |
 | 27 | `purge-git-history` | hitl | `rotate-plex-token`, `release-bump` |
+| 28 | `display-decode-hang` | afk | `rotation-layout-and-shell` |
 
 ### Waves (longest-path levels)
 
