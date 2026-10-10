@@ -82,3 +82,8 @@ Decisions that bind the integration plan (`docs/integration-plan.md`) and spec (
 - **D32 Pins stay exempt (K24).** Pinning an above-limit now-playing poster stays allowed (D5); `kiosk-and-pin` puts Settings and the pin control behind the owner's PIN.
 - **D33 TV episode ratings (C6M2).** Whether Plex rates episodes lower than their shows is checked on the real server in `real-server-validation-extended`; fixed only if it happens.
 - **D34 Conductor rulings kept.** K19 (changing the limit replaces an on-screen poster at once), K20 (offline: replaced by an allowed cached poster or the empty card). K22 retired (the after-decode re-check has a test). P1 (the sleep-mode predispatch/metrics slip) noted.
+
+## Stop 10 — 2026-10-10, owner answer "I agree" (items 1–2; item 3, token rotation, still open)
+
+- **D35 Content filter: one more round.** One more owner-authorised `content-rating-filter` round, then land: an imported pin survives Save (the dialog keeps its pending pin; C7I1); a stricter limit saved during a crossfade also removes an outgoing above-limit poster at once (C7M1); a cached poster's stored rating is refreshed whenever the poster is seen online (C7M2).
+- **D36 An explicit null limit means no limit.** `"maxContentRating": null` is the same as leaving the setting out; only an unknown value fails closed (D31).
